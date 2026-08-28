@@ -7,7 +7,7 @@ router = APIRouter()
 
 
 def _enrich(row: dict) -> dict:
-    traj = predict(row["lat"], row["lon"])
+    traj = predict(row["lat"], row["lon"], name=row["name"])
     diameter = 0.6 + (abs(hash(row["name"])) % 25) / 10
     high = diameter >= 1.8
     return {

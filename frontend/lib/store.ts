@@ -67,7 +67,8 @@ interface PolarisState {
   autoMode: boolean;
   forecastDay: number;
   destination: { lat: number; lon: number };
-  alerts: { tier: string; message: string; ts: string }[];
+  iceGrid: { lat: number; lon: number; sic: number }[];
+  alerts: { id?: string; tier: string; message: string; ts: string; timestamp?: string }[];
   detections: {
     name: string;
     confidence: number;
@@ -75,6 +76,7 @@ interface PolarisState {
     lat: number;
     lon: number;
   }[];
+  setIceGrid: (grid: { lat: number; lon: number; sic: number }[]) => void;
   setIcebergs: (icebergs: Iceberg[]) => void;
   setRoutes: (routes: RouteOption[]) => void;
   setAutoMode: (v: boolean) => void;
@@ -95,7 +97,7 @@ const fallback = (reason: string): DataSourceReality => ({
 
 export const usePolarisStore = create<PolarisState>((set, get) => ({
   vessel: { ...MOCK_VESSEL },
-  icebergs: ALL_ICEBERGS,
+  icebergs: [],
   selectedIcebergId: null,
   routes: MOCK_ROUTES,
   lockedRouteId: "balanced",
@@ -165,9 +167,11 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
       alerts: [
         ...get().alerts.slice(-40),
         {
+          id: `INFO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           tier: "INFO",
           message: "Iceberg trajectory updated, route recalculating",
           ts: new Date().toISOString(),
+          timestamp: new Date().toISOString(),
         },
       ],
     });
@@ -176,9 +180,11 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   autoMode: false,
   forecastDay: 3,
   destination: { lat: -68.72, lon: -49.55 },
+  iceGrid: [],
   alerts: [],
   detections: [],
   soundOn: false,
+  setIceGrid: (iceGrid) => set({ iceGrid }),
   setIcebergs: (icebergs) => set({ icebergs }),
   setRoutes: (routes) => set({ routes }),
   setAutoMode: (v) => set({ autoMode: v }),
@@ -186,9 +192,16 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setForecastDay: (d) => set({ forecastDay: d }),
   setDestination: (d) => set({ destination: d }),
   pushAlert: (tier, message) =>
-    set((s) => ({
-      alerts: [...s.alerts.slice(-40), { tier, message, ts: new Date().toISOString() }],
-    })),
+    set((s) => {
+      const ts = new Date().toISOString();
+      const id = `${tier}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      return {
+        alerts: [
+          ...s.alerts.slice(-40),
+          { id, tier, message, ts, timestamp: ts },
+        ],
+      };
+    }),
   pushDetection: (d) =>
     set((s) => ({ detections: [...s.detections.slice(-30), d] })),
   setDataReality: (dataReality) => set({ dataReality }),

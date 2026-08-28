@@ -7,6 +7,7 @@ import { AlertBanner } from "@/components/HUD/AlertBanner";
 import { AutoControls } from "@/components/HUD/AutoControls";
 import { DataRealityBadge } from "@/components/HUD/DataRealityBadge";
 import { DetectionLog } from "@/components/HUD/DetectionLog";
+import { AlertHistoryLog } from "@/components/HUD/AlertHistoryLog";
 import { ExportPdfButton } from "@/components/HUD/ExportPdfButton";
 import { ForecastSlider } from "@/components/HUD/ForecastSlider";
 import { IcebergInfoPanel } from "@/components/HUD/IcebergInfoPanel";
@@ -17,6 +18,7 @@ import { MovementControls } from "@/components/HUD/MovementControls";
 import { RouteInfoPanel } from "@/components/HUD/RouteInfoPanel";
 import { TopBar } from "@/components/HUD/TopBar";
 import { fetchIcebergs } from "@/lib/api";
+import { ALL_ICEBERGS } from "@/lib/mockData";
 import { usePolarisStore, type KeysDown } from "@/lib/store";
 
 const SceneCanvas = dynamic(
@@ -86,26 +88,53 @@ export default function SimulationPage() {
             lat: -68.33,
             lon: -52.2,
           });
-          setDataReality({
-            nsidc: {
-              status: "FALLBACK",
-              lastLive: null,
-              reason: "No Earthdata account",
-            },
-            byu: {
-              status: "LIVE",
-              lastLive: new Date().toISOString(),
-              reason: null,
-            },
-            era5: {
-              status: "FALLBACK",
-              lastLive: null,
-              reason: "No CDS key",
-            },
-          });
+          const API = process.env.NEXT_PUBLIC_API_URL ?? "";
+          fetch(`${API}/api/status`)
+            .then((res) => {
+              if (!res.ok) throw new Error("status fetch failed");
+              return res.json();
+            })
+            .then((data) => {
+              setDataReality({
+                nsidc: {
+                  status: data.nsidc?.status ?? "FALLBACK",
+                  lastLive: data.nsidc?.fetched_at ?? null,
+                  reason: data.nsidc?.status === "FALLBACK" ? (data.nsidc?.error ?? "Unknown error") : null,
+                },
+                byu: {
+                  status: data.byu?.status ?? "FALLBACK",
+                  lastLive: data.byu?.status === "LIVE" ? new Date().toISOString() : null,
+                  reason: data.byu?.status === "FALLBACK" ? (data.byu?.error ?? "Unknown error") : null,
+                },
+                era5: {
+                  status: data.era5?.status ?? "FALLBACK",
+                  lastLive: data.era5?.fetched_at ?? null,
+                  reason: data.era5?.status === "FALLBACK" ? (data.era5?.error ?? "Unknown error") : null,
+                },
+              });
+            })
+            .catch((err) => console.error("Error fetching status in simulation:", err));
+        } else {
+          setIcebergs(ALL_ICEBERGS);
+        }
+      })
+      .catch(() => {
+        setIcebergs(ALL_ICEBERGS);
+      });
+
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "";
+    fetch(`${API}/api/ice/current`)
+      .then((res) => {
+        if (!res.ok) throw new Error("current ice fetch failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (data.grid) {
+          usePolarisStore.getState().setIceGrid(data.grid);
         }
       })
       .catch(() => undefined);
+
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
@@ -137,6 +166,7 @@ export default function SimulationPage() {
             <RouteInfoPanel />
             <AutoControls />
             <DetectionLog />
+            <AlertHistoryLog />
             <ExportPdfButton />
           </div>
         </div>

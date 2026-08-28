@@ -6,8 +6,17 @@ import argparse
 import json
 import math
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+import earthaccess
+import requests
+import numpy as np
+import xarray as xr
+from dotenv import load_dotenv, find_dotenv
+
+# Load environment variables
+load_dotenv(find_dotenv(), override=True)
 
 SAMPLE_PATH = Path(__file__).parent / "samples" / "nsidc_sic_sample.json"
 CACHE_PATH = Path(__file__).parent / "cache" / "nsidc_sic.json"
@@ -29,22 +38,124 @@ def synthetic_grid(day_offset: int = 0) -> dict:
     }
 
 
+def fetch_nsidc_live() -> str:
+    """
+    Downloads the daily Antarctic sea ice concentration NetCDF from G10016 V4 (NOAA@NSIDC).
+    This dataset is accessed directly via HTTPS file listing from noaadata.apps.nsidc.org.
+    """
+    base_url = "https://noaadata.apps.nsidc.org/NOAA/G10016_V4/south/daily"
+    
+    # Try recent days starting from 2 days back to 10 days back (to account for lags)
+    for days_back in range(2, 10):
+        target_date = datetime.now(timezone.utc) - timedelta(days=days_back)
+        year = target_date.strftime("%Y")
+        date_str = target_date.strftime("%Y%m%d")
+        filename = f"sic_pss25_{date_str}_am2_icdr_v04r00.nc"
+        url = f"{base_url}/{year}/{filename}"
+        
+        try:
+            resp = requests.get(url, timeout=30)
+            if resp.status_code == 200:
+                target_dir = Path(__file__).parent / "cache" / "nsidc_raw"
+                os.makedirs(target_dir, exist_ok=True)
+                path = target_dir / filename
+                with open(path, "wb") as f:
+                    f.write(resp.content)
+                return str(path)
+        except Exception:
+            continue
+            
+    raise RuntimeError("No recent NSIDC G10016 file found in last 10 days")
+
+
 def run() -> dict:
-    user = os.getenv("EARTHDATA_USERNAME")
-    password = os.getenv("EARTHDATA_PASSWORD")
     live = False
     error = None
-    if user and password:
-        error = "Earthdata credentials present but NSIDC NetCDF download not executed in this build"
-        grid = synthetic_grid()
-    else:
-        error = "No Earthdata account configured"
-        grid = synthetic_grid()
+    grid = None
+    
+    try:
+        target_file = fetch_nsidc_live()
+        if not target_file:
+            raise RuntimeError("No file downloaded from NSIDC")
+            
+        # Parse downloaded NetCDF files using xarray
+        with xr.open_dataset(target_file) as ds:
+            # check if latitude/longitude coordinates exist
+            if 'latitude' in ds.coords and 'longitude' in ds.coords:
+                lats_2d = ds['latitude'].values
+                lons_2d = ds['longitude'].values
+            elif 'x' in ds.coords and 'y' in ds.coords:
+                # Project x and y to lat/lon using pyproj
+                import pyproj
+                proj_in = pyproj.Proj("+proj=stere +lat_0=-90 +lat_ts=-70 +lon_0=0 +k=1 +x_0=0 +y_0=0 +a=6378273 +b=6356889.449 +units=m +no_defs")
+                proj_out = pyproj.Proj("+proj=longlat +datum=WGS84")
+                transformer = pyproj.Transformer.from_proj(proj_in, proj_out)
+                
+                xx, yy = np.meshgrid(ds['x'].values, ds['y'].values)
+                lons_2d, lats_2d = transformer.transform(xx, yy)
+            else:
+                raise RuntimeError("No coordinate variables found (latitude/longitude or x/y)")
+            
+            # Identify sea ice variable
+            sic_var_name = None
+            for var in ['sea_ice_concentration', 'seaice_conc_cdr', 'seaice_conc', 'concentration', 'cdr_seaice_conc']:
+                if var in ds.data_vars:
+                    sic_var_name = var
+                    break
+            
+            if not sic_var_name:
+                for var in ds.data_vars:
+                    if 'ice' in var.lower() or 'conc' in var.lower():
+                        sic_var_name = var
+                        break
+            
+            if not sic_var_name:
+                sic_var_name = list(ds.data_vars.keys())[0]
+                
+            sic_data = ds[sic_var_name].values
+            if len(sic_data.shape) == 3:
+                sic_data = sic_data[0]
+                
+            cells = []
+            for lat_target in [ -62 + 0.4 * k for k in range(22)]:
+                for lon_target in [ -60 + 0.6 * k for k in range(28)]:
+                    # Compute distances to find nearest grid coordinate
+                    dist = (lats_2d - lat_target)**2 + (lons_2d - lon_target)**2
+                    idx = np.unravel_index(np.argmin(dist), dist.shape)
+                    
+                    sic_val = float(sic_data[idx])
+                    # Normalize sea ice concentration value (0.0 to 1.0)
+                    if math.isnan(sic_val) or sic_val > 100.0 or sic_val < 0.0:
+                        sic_val = 0.0
+                    else:
+                        if sic_val > 1.0:
+                            sic_val = sic_val / 100.0
+                            
+                    cells.append({
+                        "lat": round(lat_target, 3),
+                        "lon": round(lon_target, 3),
+                        "sic": round(sic_val, 3)
+                    })
+                    
+            grid = {
+                "grid_km": 25,
+                "day_offset": 0,
+                "cells": cells,
+            }
+            live = True
+    except Exception as exc:
+        error = str(exc)
+        # Load sample if exists, else generate synthetic_grid
         if SAMPLE_PATH.exists():
-            grid = json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
+            try:
+                grid = json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                grid = synthetic_grid()
         else:
+            grid = synthetic_grid()
             SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
             SAMPLE_PATH.write_text(json.dumps(grid, indent=2), encoding="utf-8")
+            
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),

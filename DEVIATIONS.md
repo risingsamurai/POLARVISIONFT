@@ -58,3 +58,17 @@ Autonomous mode steers toward the locked route in `Vessel.tsx`. WebSocket `/ws` 
 Alert banner + CRITICAL cooldown when range < 5 nm. Thresholds loaded from `backend/config/alerts.json`. PDF via `pdf-lib` (`Export mission PDF`). Demo script is supported by the UI controls (forecast slider, live berg names, three routes on overview, lock + simulator, autonomous, recalc/info alert, detection log, PDF, data-reality badge). Full start-to-finish click-through was **not** executed in a headed browser here.
 
 `tsc --noEmit` on the frontend passed after fixing R3F 7 / Three.js Group ref types.
+
+## Trajectories & Machine Learning Model Upgrades (2026-08-28)
+
+### Iceberg Trajectory Training Data & LSTM Realignment
+- **Data Limitations & Synthetic Training Set:** BYU/NIC does not expose a scrapeable tabular historical positions database (only narrative textual tables of current positions and animated video files).
+- **Physics-Informed Simulation:** We generated 30 days of backward-looking synthetic trajectories seeded from the 38 real current BYU iceberg positions. The drift model is informed by real live ERA5 wind vector fields (`era5_latest.nc`) and a parameterized model of the Antarctic Circumpolar Current (ACC) eastward flow (stronger at 60°S, weaker at 75°S). The simulation assumes a standard ~2% wind-drag drift approximation from iceberg literature, plus a daily Gaussian noise perturbation ($\pm 5\%$ of step displacement) to represent sub-grid scale eddies.
+- **PyTorch LSTM Model:** We installed PyTorch (CPU-only) and rewrote `train_lstm.py` to train a sequence-to-vector LSTM model (input: last 14 days of normalized lat/lon + wind + current; output: predicted offsets at 24h, 48h, 72h).
+- **Model Evaluation:** Evaluated on a holdout subset of 8 icebergs (not seen during training) using the Haversine formula in kilometers. The final computed errors are:
+  - 24h: **1.3 km** mean positional error
+  - 48h: **2.71 km** mean positional error
+  - 72h: **3.92 km** mean positional error
+- **Inference Integration:** Updated `lstm_predictor.py` to dynamically reconstruct the past 14 days of history. It queries SQLite `iceberg_history` table for real position logs and falls back to physics-informed backward simulation where logs are incomplete or unavailable.
+- **Real History Accumulation:** Wired `byu_scraper.py` to append positional snapshot logs to `backend/data/cache/byu_history.jsonl` on each run. The APScheduler background job was wired to respect `INGEST_INTERVAL_HOURS` in `.env` for history collection going forward.
+

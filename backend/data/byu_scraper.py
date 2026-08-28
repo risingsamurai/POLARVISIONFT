@@ -86,8 +86,9 @@ def load_sample() -> list[dict]:
 
 def save_cache(icebergs: list[dict], live: bool) -> Path:
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fetched_at = datetime.now(timezone.utc).isoformat()
     payload = {
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": fetched_at,
         "live": live,
         "count": len(icebergs),
         "icebergs": icebergs,
@@ -96,6 +97,19 @@ def save_cache(icebergs: list[dict], live: bool) -> Path:
     SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
     if live:
         SAMPLE_PATH.write_text(json.dumps(icebergs, indent=2), encoding="utf-8")
+        
+    # Append to byu_history.jsonl
+    history_path = CACHE_PATH.parent / "byu_history.jsonl"
+    with open(history_path, "a", encoding="utf-8") as f:
+        for r in icebergs:
+            line_data = {
+                "id": r["name"],
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "timestamp": fetched_at
+            }
+            f.write(json.dumps(line_data) + "\n")
+            
     return CACHE_PATH
 
 
