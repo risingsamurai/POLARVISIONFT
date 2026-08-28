@@ -1,0 +1,141 @@
+"use client";
+
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useRef } from "react";
+import * as THREE from "three";
+import { latLonToScene } from "@/lib/geo";
+import { usePolarisStore } from "@/lib/store";
+import { DangerZones } from "./DangerZone";
+import { IcebergField } from "./Iceberg";
+import { Ocean } from "./Ocean";
+import { RouteLine } from "./RouteLine";
+import { Vessel } from "./Vessel";
+
+function ChaseCamera() {
+  const { camera, gl } = useThree();
+  const dragging = useRef(false);
+  const last = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const el = gl.domElement;
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0 && e.button !== 2) return;
+      dragging.current = true;
+      last.current = { x: e.clientX, y: e.clientY };
+      usePolarisStore.getState().setCameraOrbiting(true);
+    };
+    const onUp = () => {
+      dragging.current = false;
+      usePolarisStore.getState().setCameraOrbiting(false);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!dragging.current) return;
+      const dx = e.clientX - last.current.x;
+      const dy = e.clientY - last.current.y;
+      last.current = { x: e.clientX, y: e.clientY };
+      const s = usePolarisStore.getState();
+      s.setOrbit(
+        s.orbitYaw - dx * 0.006,
+        THREE.MathUtils.clamp(s.orbitPitch + dy * 0.005, 0.08, 1.15)
+      );
+    };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const s = usePolarisStore.getState();
+      const d = THREE.MathUtils.clamp(
+        s.cameraDistance + e.deltaY * 0.035,
+        14,
+        90
+      );
+      s.setOrbit(s.orbitYaw, s.orbitPitch, d);
+    };
+    el.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointermove", onMove);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [gl]);
+
+  useFrame(() => {
+    const { vessel, orbitYaw, orbitPitch, cameraDistance } =
+      usePolarisStore.getState();
+    const [x, , z] = latLonToScene(vessel.lat, vessel.lon);
+
+    // Navigational heading: 0° is North (-Z), 90° is East (+X)
+    const vesselHeadingRad = THREE.MathUtils.degToRad(vessel.headingDeg);
+    const totalYaw = vesselHeadingRad + orbitYaw;
+
+    // Camera placed behind and above vessel
+    const forwardX = Math.sin(totalYaw);
+    const forwardZ = -Math.cos(totalYaw);
+
+    const horizontalDist = cameraDistance * Math.cos(orbitPitch);
+    const cx = x - forwardX * horizontalDist;
+    const cz = z - forwardZ * horizontalDist;
+    const cy = 3.8 + Math.sin(orbitPitch) * cameraDistance;
+
+    const targetPos = new THREE.Vector3(cx, cy, cz);
+    camera.position.lerp(targetPos, 0.1);
+
+    // Look slightly ahead of the vessel at deck level
+    const lookTarget = new THREE.Vector3(
+      x + forwardX * 6,
+      1.8,
+      z + forwardZ * 6
+    );
+    camera.lookAt(lookTarget);
+  });
+
+  return null;
+}
+
+function IceHeatPatch() {
+  const on = usePolarisStore((s) => s.layers.seaIce);
+  const day = usePolarisStore((s) => s.forecastDay);
+  if (!on) return null;
+  const radius = 26 + day * 3.5;
+  const opacity = 0.14 + day * 0.03;
+  const color = day >= 6 ? "#ffffff" : day >= 4 ? "#93c5fd" : "#38bdf8";
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[18, 0.05, -12]}>
+      <circleGeometry args={[radius, 64]} />
+      <meshBasicMaterial color={color} transparent opacity={opacity} />
+    </mesh>
+  );
+}
+
+export function SceneCanvas() {
+  return (
+    <Canvas
+      camera={{ position: [0, 16, 32], fov: 52, near: 0.1, far: 600 }}
+      onPointerMissed={() => usePolarisStore.getState().selectIceberg(null)}
+      gl={{ antialias: true, powerPreference: "high-performance" }}
+      style={{ width: "100%", height: "100%", background: "#5a6878" }}
+      onCreated={({ scene, gl }) => {
+        scene.fog = new THREE.Fog(0x5a6878, 80, 360);
+        gl.setClearColor(0x5a6878);
+      }}
+    >
+      <ambientLight intensity={0.6} />
+      <directionalLight
+        position={[60, 90, 40]}
+        intensity={0.9}
+        castShadow
+      />
+      <hemisphereLight args={["#dbeafe", "#1e293b", 0.45]} />
+      <ChaseCamera />
+      <Ocean />
+      <IceHeatPatch />
+      <Vessel />
+      <IcebergField />
+      <DangerZones />
+      <RouteLine />
+    </Canvas>
+  );
+}
+

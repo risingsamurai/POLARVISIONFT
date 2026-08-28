@@ -1,0 +1,56 @@
+"use client";
+
+import { usePolarisStore, type Layers } from "@/lib/store";
+
+const ITEMS: { key: keyof Layers; label: string }[] = [
+  { key: "seaIce", label: "Sea Ice Concentration" },
+  { key: "icebergs", label: "Icebergs (Detection)" },
+  { key: "predictions", label: "Iceberg Predictions" },
+  { key: "riskZones", label: "Risk Zones" },
+  { key: "route", label: "Recommended Route" },
+  { key: "vessel", label: "Vessel" },
+];
+
+export function LayerControlPanel() {
+  const layers = usePolarisStore((s) => s.layers);
+  const toggle = usePolarisStore((s) => s.toggleLayer);
+
+  return (
+    <section className="hud-panel p-3.5 w-64 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white shadow-xl">
+      <h2 className="hud-header mb-3 text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
+        Layer Control
+      </h2>
+      <ul className="space-y-2.5">
+        {ITEMS.map((item) => {
+          const on = layers[item.key];
+          return (
+            <li
+              key={item.key}
+              className="flex items-center justify-between gap-3 text-xs"
+            >
+              <span className="text-white/85 font-medium text-[11px]">
+                {item.label}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={on}
+                onClick={() => toggle(item.key)}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  on ? "bg-cyan-500 shadow-sm shadow-cyan-500/50" : "bg-white/20"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    on ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+

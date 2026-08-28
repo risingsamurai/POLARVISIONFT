@@ -1,0 +1,6 @@
+{
+  "criticalNm": 5,
+  "warningNm": 15,
+  "iceConcentrationWarning": 0.7,
+  "soundDefault": false
+}

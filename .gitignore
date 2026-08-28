@@ -1,0 +1,34 @@
+# env & secrets
+.env
+.env.local
+*.pem
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# node
+node_modules/
+.next/
+out/
+frontend/.next/
+
+# data caches
+backend/data/cache/
+backend/data/samples/*.nc
+ml_training/checkpoints/
+ml_training/runs/
+
+# docker
+postgres_data/
+
+# os / ide
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
