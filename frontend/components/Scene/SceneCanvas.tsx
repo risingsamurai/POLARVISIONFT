@@ -112,12 +112,13 @@ function IceHeatPatch() {
 export function SceneCanvas() {
   return (
     <Canvas
-      camera={{ position: [0, 16, 32], fov: 52, near: 0.1, far: 600 }}
+      camera={{ position: [0, 16, 32], fov: 52, near: 0.1, far: 3000 }}
+      tabIndex={0}
       onPointerMissed={() => usePolarisStore.getState().selectIceberg(null)}
       gl={{ antialias: true, powerPreference: "high-performance" }}
       style={{ width: "100%", height: "100%", background: "#5a6878" }}
       onCreated={({ scene, gl }) => {
-        scene.fog = new THREE.Fog(0x5a6878, 80, 360);
+        scene.fog = new THREE.Fog(0x5a6878, 80, 2000);
         gl.setClearColor(0x5a6878);
       }}
     >
@@ -138,4 +139,3 @@ export function SceneCanvas() {
     </Canvas>
   );
 }
-

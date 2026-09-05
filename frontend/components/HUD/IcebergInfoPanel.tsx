@@ -4,33 +4,36 @@ import { usePolarisStore } from "@/lib/store";
 
 export function IcebergInfoPanel() {
   const id = usePolarisStore((s) => s.selectedIcebergId);
-  const iceberg = usePolarisStore((s) =>
-    s.icebergs.find((i) => i.id === id)
-  );
+  const icebergs = usePolarisStore((s) => s.icebergs);
+  const select = usePolarisStore((s) => s.selectIceberg);
+  const iceberg = icebergs.find((i) => i.id === id);
 
   return (
-    <section className="hud-panel p-3.5 w-72 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white shadow-xl">
-      <div className="flex items-center justify-between mb-2.5">
-        <h2 className="hud-header text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
+    <section className="hud-panel p-3.5 w-72 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white shadow-xl pointer-events-auto">
+      <div className="flex items-center justify-between mb-2.5 gap-2">
+        <h2 className="hud-header text-[10px] font-bold uppercase tracking-[0.18em] text-white/50 shrink-0">
           Iceberg Telemetry
         </h2>
-        {iceberg && (
-          <span
-            className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
-              iceberg.highRisk
-                ? "bg-red-500/20 text-red-300 border border-red-500/30"
-                : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-            }`}
+        {icebergs.length > 0 && (
+          <select
+            value={id ?? ""}
+            onChange={(e) => select(e.target.value || null)}
+            className="bg-black/60 text-cyan-300 text-[10px] font-mono border border-cyan-500/30 rounded px-1.5 py-0.5 outline-none cursor-pointer truncate max-w-[140px]"
           >
-            {iceberg.status}
-          </span>
+            <option value="">Select Target...</option>
+            {icebergs.map((ib) => (
+              <option key={ib.id} value={ib.id}>
+                {ib.name} ({ib.id})
+              </option>
+            ))}
+          </select>
         )}
       </div>
 
       {!iceberg ? (
         <div className="py-4 text-center">
-          <p className="text-xs text-white/40">Select an iceberg in the 3D scene</p>
-          <p className="text-[10px] text-white/25 mt-0.5">Click any ice mass to inspect</p>
+          <p className="text-xs text-white/40">Select an iceberg target above or in 3D scene</p>
+          <p className="text-[10px] text-white/25 mt-0.5">38 NIC/BYU Icebergs Tracked</p>
         </div>
       ) : (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
@@ -56,9 +59,21 @@ export function IcebergInfoPanel() {
           <dd className="tabular-nums font-mono text-[11px] text-white/80">
             {iceberg.headingDeg.toFixed(0)}°
           </dd>
+          {iceberg.predictedPath && iceberg.predictedPath.length > 1 && (
+            <>
+              <dt className="text-cyan-400/80 text-[10px] col-span-2 pt-1.5 mt-1 border-t border-white/10 font-bold uppercase tracking-wider">
+                Hybrid LSTM Predictions
+              </dt>
+              {iceberg.predictedPath.slice(1).map((pt) => (
+                <dd key={pt.hour} className="col-span-2 flex justify-between text-[10px] font-mono text-cyan-200/90 pl-1">
+                  <span>+{pt.hour}h: {pt.lat.toFixed(3)}°, {pt.lon.toFixed(3)}°</span>
+                  <span className="text-cyan-400/70">±{(4.5 * Math.sqrt(pt.hour / 24)).toFixed(1)} NM</span>
+                </dd>
+              ))}
+            </>
+          )}
         </dl>
       )}
     </section>
   );
 }
-

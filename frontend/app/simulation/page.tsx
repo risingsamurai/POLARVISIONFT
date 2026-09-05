@@ -17,7 +17,7 @@ import { Minimap } from "@/components/HUD/Minimap";
 import { MovementControls } from "@/components/HUD/MovementControls";
 import { RouteInfoPanel } from "@/components/HUD/RouteInfoPanel";
 import { TopBar } from "@/components/HUD/TopBar";
-import { fetchIcebergs } from "@/lib/api";
+import { fetchIcebergs, fetchRoutes } from "@/lib/api";
 import { ALL_ICEBERGS } from "@/lib/mockData";
 import { usePolarisStore, type KeysDown } from "@/lib/store";
 
@@ -28,9 +28,17 @@ const SceneCanvas = dynamic(
 
 const KEY_MAP: Record<string, keyof KeysDown> = {
   KeyW: "w",
+  w: "w",
+  W: "w",
   KeyA: "a",
+  a: "a",
+  A: "a",
   KeyS: "s",
+  s: "s",
+  S: "s",
   KeyD: "d",
+  d: "d",
+  D: "d",
   ArrowUp: "up",
   ArrowDown: "down",
   ArrowLeft: "left",
@@ -40,23 +48,35 @@ const KEY_MAP: Record<string, keyof KeysDown> = {
 export default function SimulationPage() {
   const setKey = usePolarisStore((s) => s.setKey);
   const setIcebergs = usePolarisStore((s) => s.setIcebergs);
+  const setRoutes = usePolarisStore((s) => s.setRoutes);
   const setDataReality = usePolarisStore((s) => s.setDataReality);
   const pushDetection = usePolarisStore((s) => s.pushDetection);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      const k = KEY_MAP[e.code];
+      const k = KEY_MAP[e.code] || KEY_MAP[e.key];
       if (!k) return;
       e.preventDefault();
       setKey(k, true);
     };
     const up = (e: KeyboardEvent) => {
-      const k = KEY_MAP[e.code];
+      const k = KEY_MAP[e.code] || KEY_MAP[e.key];
       if (!k) return;
       setKey(k, false);
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+
+    // Fetch initial backend A* routes
+    const { vessel, destination } = usePolarisStore.getState();
+    fetchRoutes([vessel.lat, vessel.lon], [destination.lat, destination.lon])
+      .then((data) => {
+        if (data.routes?.length) {
+          setRoutes(data.routes);
+        }
+      })
+      .catch((err) => console.error("Initial 3D route fetch failed:", err));
+
     fetchIcebergs()
       .then((data) => {
         if (data.icebergs?.length) {
@@ -139,7 +159,7 @@ export default function SimulationPage() {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [setKey, setIcebergs, setDataReality, pushDetection]);
+  }, [setKey, setIcebergs, setRoutes, setDataReality, pushDetection]);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-slate-900">
@@ -151,26 +171,48 @@ export default function SimulationPage() {
           <TopBar />
           <AlertBanner />
         </div>
-        <div className="flex-1 flex justify-between items-start">
-          <div className="pointer-events-auto flex flex-col gap-2">
-            <LayerControlPanel />
-            <IceLevelLegend />
-            <ForecastSlider />
-            <DataRealityBadge />
-            <Link href="/" className="hud-panel px-3 py-2 text-[10px] uppercase tracking-wide">
-              Overview map
-            </Link>
+        <div className="flex-1 flex justify-between items-start pointer-events-none">
+          <div className="pointer-events-none flex flex-col gap-2">
+            <div className="pointer-events-auto">
+              <LayerControlPanel />
+            </div>
+            <div className="pointer-events-auto">
+              <IceLevelLegend />
+            </div>
+            <div className="pointer-events-auto">
+              <ForecastSlider />
+            </div>
+            <div className="pointer-events-auto">
+              <DataRealityBadge />
+            </div>
+            <div className="pointer-events-auto">
+              <Link href="/" className="hud-panel inline-block px-3 py-2 text-[10px] uppercase tracking-wide">
+                Overview map
+              </Link>
+            </div>
           </div>
-          <div className="pointer-events-auto flex flex-col gap-2">
-            <IcebergInfoPanel />
-            <RouteInfoPanel />
-            <AutoControls />
-            <DetectionLog />
-            <AlertHistoryLog />
-            <ExportPdfButton />
+          <div className="pointer-events-none flex flex-col gap-2">
+            <div className="pointer-events-auto">
+              <IcebergInfoPanel />
+            </div>
+            <div className="pointer-events-auto">
+              <RouteInfoPanel />
+            </div>
+            <div className="pointer-events-auto">
+              <AutoControls />
+            </div>
+            <div className="pointer-events-auto">
+              <DetectionLog />
+            </div>
+            <div className="pointer-events-auto">
+              <AlertHistoryLog />
+            </div>
+            <div className="pointer-events-auto">
+              <ExportPdfButton />
+            </div>
           </div>
         </div>
-        <div className="flex items-end justify-between">
+        <div className="flex items-end justify-between pointer-events-none">
           <div className="pointer-events-auto">
             <Minimap />
           </div>

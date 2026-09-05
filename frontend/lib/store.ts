@@ -144,37 +144,30 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
       cameraDistance: distance ?? s.cameraDistance,
     })),
   lockRoute: (id) => set({ lockedRouteId: id }),
-  recalculateRoute: () => {
-    const { routes, lockedRouteId, routeVersion } = get();
-    const jitter = (n: number) => (Math.random() - 0.5) * n;
-    const next = routes.map((r) => {
-      if (r.id !== lockedRouteId) return r;
-      return {
-        ...r,
-        distanceNm: +(r.distanceNm + jitter(8)).toFixed(1),
-        etaHours: +(r.etaHours + jitter(1.2)).toFixed(1),
-        fuelMt: +(r.fuelMt + jitter(1.4)).toFixed(1),
-        points: r.points.map((p, i) =>
-          i === 0 || i === r.points.length - 1
-            ? p
-            : { lat: p.lat + jitter(0.08), lon: p.lon + jitter(0.12) }
-        ),
-      };
-    });
-    set({
-      routes: next,
-      routeVersion: routeVersion + 1,
-      alerts: [
-        ...get().alerts.slice(-40),
-        {
-          id: `INFO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          tier: "INFO",
-          message: "Iceberg trajectory updated, route recalculating",
-          ts: new Date().toISOString(),
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+  recalculateRoute: async () => {
+    const { vessel, destination, routeVersion } = get();
+    try {
+      const { fetchRoutes } = await import("./api");
+      const data = await fetchRoutes([vessel.lat, vessel.lon], [destination.lat, destination.lon]);
+      if (data.routes && data.routes.length > 0) {
+        set({
+          routes: data.routes,
+          routeVersion: routeVersion + 1,
+          alerts: [
+            ...get().alerts.slice(-40),
+            {
+              id: `INFO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              tier: "INFO",
+              message: "A* land-avoiding route recalculating via backend",
+              ts: new Date().toISOString(),
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+    } catch (err) {
+      console.error("Failed to recalculate route:", err);
+    }
   },
   tickTime: () => set({ simTimeIso: new Date().toISOString() }),
   autoMode: false,
