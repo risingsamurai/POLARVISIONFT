@@ -1,7 +1,8 @@
-"""Evaluate the trained PyTorch LSTM model on holdout trajectories.
+"""Evaluate the trained Hybrid PyTorch LSTM model on real BYU holdout trajectories.
 
 Calculates the mean positional prediction error in kilometers (using Haversine formula)
-for 24h, 48h, and 72h horizons.
+for 24h, 48h, and 72h horizons on unobserved holdout icebergs, and performs an ablation
+study comparing performance with vs. without the static iceberg size feature.
 """
 
 from __future__ import annotations
@@ -16,21 +17,27 @@ import torch.nn as nn
 
 # Paths
 ROOT = Path(__file__).resolve().parents[1]
-DATASET_PATH = Path(__file__).parent / "synthetic_drift_dataset.csv"
+DATASET_PATH = Path(__file__).parent / "real_historical_trajectories.csv"
 MODEL_PATH = ROOT / "backend" / "ml" / "lstm_weights.pt"
 METRICS_PATH = Path(__file__).parent / "checkpoints" / "eval_metrics.json"
 
 
-class IcebergLSTM(nn.Module):
-    def __init__(self, input_size=6, hidden_size=32, num_layers=1, output_size=6):
+class HybridIcebergLSTM(nn.Module):
+    def __init__(self, seq_input_size=6, static_input_size=1, hidden_size=32, output_size=6):
         super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, output_size)
-        
-    def forward(self, x):
-        out, _ = self.lstm(x)
+        self.lstm = nn.LSTM(seq_input_size, hidden_size, num_layers=1, batch_first=True)
+        self.size_fc = nn.Linear(static_input_size, 8)
+        self.relu = nn.ReLU()
+        self.fc1 = nn.Linear(hidden_size + 8, 32)
+        self.fc2 = nn.Linear(32, output_size)
+
+    def forward(self, x_seq, x_static):
+        out, _ = self.lstm(x_seq)
         last_out = out[:, -1, :]
-        preds = self.fc(last_out)
+        size_emb = self.relu(self.size_fc(x_static))
+        combined = torch.cat([last_out, size_emb], dim=1)
+        h = self.relu(self.fc1(combined))
+        preds = self.fc2(h)
         return preds
 
 
@@ -44,83 +51,142 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(min(1.0, math.sqrt(h)))
 
 
-def main():
+def prepare_holdout_windows(df: pd.DataFrame, holdout_ids: list[str]) -> tuple[torch.Tensor, torch.Tensor, list[tuple[float, float, float, float, float, float, float, float]]]:
+    """Generates test windows from holdout icebergs."""
+    X_seq_list = []
+    X_static_list = []
+    targets_info = []  # (last_lat, last_lon, real_lat_24, real_lon_24, real_lat_48, real_lon_48, real_lat_72, real_lon_72)
+
+    grouped = df.groupby("iceberg_id")
+    target_ids = set(holdout_ids)
+
+    for berg_id in target_ids:
+        if berg_id not in grouped.groups:
+            continue
+        berg_df = grouped.get_group(berg_id).sort_values("date")
+        if len(berg_df) < 17:
+            continue
+
+        coords = berg_df[["lat", "lon", "wind_u", "wind_v", "current_u", "current_v"]].values
+        sizes = berg_df["size_nm"].values
+
+        for start_idx in range(0, len(berg_df) - 17 + 1, 3):
+            window_coords = coords[start_idx : start_idx + 17]
+            window_sizes = sizes[start_idx : start_idx + 17]
+
+            seq = window_coords[:14].copy()
+            last_lat = seq[-1, 0]
+            last_lon = seq[-1, 1]
+
+            # Center lat/lon
+            seq[:, 0] -= last_lat
+            seq[:, 1] -= last_lon
+
+            mean_size = float(np.mean(window_sizes[:14])) / 10.0
+
+            real_lat_24, real_lon_24 = window_coords[14, 0], window_coords[14, 1]
+            real_lat_48, real_lon_48 = window_coords[15, 0], window_coords[15, 1]
+            real_lat_72, real_lon_72 = window_coords[16, 0], window_coords[16, 1]
+
+            # Filter unrealistic jumps
+            max_disp = max(
+                abs(real_lat_24 - last_lat), abs(real_lon_24 - last_lon),
+                abs(real_lat_48 - last_lat), abs(real_lon_48 - last_lon),
+                abs(real_lat_72 - last_lat), abs(real_lon_72 - last_lon),
+            )
+            if max_disp > 5.0:
+                continue
+
+            X_seq_list.append(seq.astype(np.float32))
+            X_static_list.append(np.array([mean_size], dtype=np.float32))
+            targets_info.append((
+                last_lat, last_lon,
+                real_lat_24, real_lon_24,
+                real_lat_48, real_lon_48,
+                real_lat_72, real_lon_72
+            ))
+
+    return (
+        torch.tensor(np.array(X_seq_list)),
+        torch.tensor(np.array(X_static_list)),
+        targets_info
+    )
+
+
+def evaluate():
     if not DATASET_PATH.exists():
         raise FileNotFoundError(f"Missing dataset at {DATASET_PATH}")
     if not MODEL_PATH.exists():
-        raise FileNotFoundError(f"Missing model weights at {MODEL_PATH}. Run train_lstm.py first.")
-        
-    # Load Model
-    model = IcebergLSTM()
-    model.load_state_dict(torch.load(MODEL_PATH))
-    model.eval()
-    
+        raise FileNotFoundError(f"Missing model weights at {MODEL_PATH}. Wait for training to finish.")
+
     df = pd.read_csv(DATASET_PATH)
     unique_ids = sorted(df["iceberg_id"].unique())
-    
-    # Holdout icebergs: last 8 icebergs (indices 30 to 37)
-    holdout_ids = unique_ids[30:]
-    print(f"Evaluating on {len(holdout_ids)} holdout icebergs: {holdout_ids}")
-    
-    errors = {24: [], 48: [], 72: []}
-    
-    for berg_id in holdout_ids:
-        berg_df = df[df["iceberg_id"] == berg_id].sort_values("day")
-        if len(berg_df) < 30:
-            continue
-            
-        coords = berg_df[["lat", "lon", "wind_u", "wind_v", "current_u", "current_v"]].values
-        
-        # We extract all 14 overlapping 17-day windows to get robust evaluation statistics
-        for start_idx in range(30 - 17 + 1):
-            window = coords[start_idx : start_idx + 17]
-            
-            # Input sequence (first 14 steps)
-            seq = window[:14].copy()
-            last_lat = seq[-1, 0]
-            last_lon = seq[-1, 1]
-            
-            # Center coordinates
-            seq[:, 0] -= last_lat
-            seq[:, 1] -= last_lon
-            
-            # Prepare tensor input
-            x_tensor = torch.tensor(seq.astype(np.float32)).unsqueeze(0) # shape: (1, 14, 6)
-            
-            with torch.no_grad():
-                preds = model(x_tensor).squeeze(0).numpy() # shape: (6,)
-                
-            # Absolute predicted positions
-            pred_lat_24 = last_lat + preds[0]
-            pred_lon_24 = last_lon + preds[1]
-            pred_lat_48 = last_lat + preds[2]
-            pred_lon_48 = last_lon + preds[3]
-            pred_lat_72 = last_lat + preds[4]
-            pred_lon_72 = last_lon + preds[5]
-            
-            # Real positions
-            real_lat_24 = window[14, 0]
-            real_lon_24 = window[14, 1]
-            real_lat_48 = window[15, 0]
-            real_lon_48 = window[15, 1]
-            real_lat_72 = window[16, 0]
-            real_lon_72 = window[16, 1]
-            
-            # Calculate errors in km
-            errors[24].append(haversine_km(pred_lat_24, pred_lon_24, real_lat_24, real_lon_24))
-            errors[48].append(haversine_km(pred_lat_48, pred_lon_48, real_lat_48, real_lon_48))
-            errors[72].append(haversine_km(pred_lat_72, pred_lon_72, real_lat_72, real_lon_72))
-            
+
+    # Same split as train_lstm.py
+    np.random.seed(42)
+    shuffled_ids = np.random.permutation(unique_ids)
+    split_idx = int(len(shuffled_ids) * 0.85)
+    holdout_ids = list(shuffled_ids[split_idx:])
+
+    print(f"Evaluating model on {len(holdout_ids)} holdout icebergs...")
+
+    model = HybridIcebergLSTM()
+    model.load_state_dict(torch.load(MODEL_PATH))
+    model.eval()
+
+    X_seq, X_static, targets_info = prepare_holdout_windows(df, holdout_ids)
+    print(f"Holdout dataset prepared: {X_seq.size(0)} evaluation windows.")
+
+    with torch.no_grad():
+        # Full model prediction (with size feature)
+        preds_with_size = model(X_seq, X_static).numpy()
+
+        # Ablation prediction (without size feature / size set to 0.0)
+        X_static_zero = torch.zeros_like(X_static)
+        preds_without_size = model(X_seq, X_static_zero).numpy()
+
+    errors_with = {24: [], 48: [], 72: []}
+    errors_without = {24: [], 48: [], 72: []}
+
+    for idx, info in enumerate(targets_info):
+        last_lat, last_lon, r_lat24, r_lon24, r_lat48, r_lon48, r_lat72, r_lon72 = info
+
+        # Predictions WITH size feature
+        p_with = preds_with_size[idx]
+        plat24_w, plon24_w = last_lat + p_with[0], last_lon + p_with[1]
+        plat48_w, plon48_w = last_lat + p_with[2], last_lon + p_with[3]
+        plat72_w, plon72_w = last_lat + p_with[4], last_lon + p_with[5]
+
+        errors_with[24].append(haversine_km(plat24_w, plon24_w, r_lat24, r_lon24))
+        errors_with[48].append(haversine_km(plat48_w, plon48_w, r_lat48, r_lon48))
+        errors_with[72].append(haversine_km(plat72_w, plon72_w, r_lat72, r_lon72))
+
+        # Predictions WITHOUT size feature
+        p_wo = preds_without_size[idx]
+        plat24_wo, plon24_wo = last_lat + p_wo[0], last_lon + p_wo[1]
+        plat48_wo, plon48_wo = last_lat + p_wo[2], last_lon + p_wo[3]
+        plat72_wo, plon72_wo = last_lat + p_wo[4], last_lon + p_wo[5]
+
+        errors_without[24].append(haversine_km(plat24_wo, plon24_wo, r_lat24, r_lon24))
+        errors_without[48].append(haversine_km(plat48_wo, plon48_wo, r_lat48, r_lon48))
+        errors_without[72].append(haversine_km(plat72_wo, plon72_wo, r_lat72, r_lon72))
+
     summary = {
         "n_holdout_icebergs": len(holdout_ids),
-        "mean_error_km": {str(h): round(float(np.mean(errors[h])), 2) for h in errors},
-        "median_error_km": {str(h): round(float(np.median(errors[h])), 2) for h in errors},
+        "n_holdout_windows": len(targets_info),
+        "mean_error_km_with_size": {str(h): round(float(np.mean(errors_with[h])), 2) for h in errors_with},
+        "median_error_km_with_size": {str(h): round(float(np.median(errors_with[h])), 2) for h in errors_with},
+        "ablation_without_size": {
+            "mean_error_km": {str(h): round(float(np.mean(errors_without[h])), 2) for h in errors_without},
+            "median_error_km": {str(h): round(float(np.median(errors_without[h])), 2) for h in errors_without},
+        }
     }
-    
+
     METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     METRICS_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print("\n--- HOLD OUT EVALUATION & ABLATION RESULTS ---")
     print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    evaluate()

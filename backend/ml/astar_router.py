@@ -1,10 +1,16 @@
-"""Weighted-grid A* producing three distinct Antarctic routes."""
+"""Weighted-grid A* producing three distinct Antarctic routes with land mask avoidance."""
 
 from __future__ import annotations
 
 import heapq
 import math
 from typing import Iterable
+import numpy as np
+
+try:
+    from data.land_mask import is_land, is_segment_land
+except ImportError:
+    from backend.data.land_mask import is_land, is_segment_land
 
 
 def _haversine_nm(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -37,14 +43,37 @@ def astar(
     berg_w: float,
     dist_w: float,
     berg_radius: float,
-    step: float = 0.22,
+    step: float = 0.20,
+    corridor_bias: float = 0.0,
+    max_iter: int = 15000,
 ) -> list[tuple[float, float]]:
-    def heur(n: tuple[float, float]) -> float:
-        return _haversine_nm(n, dest) * dist_w
+    """Runs land-avoiding A* search across ocean grid cells."""
+    s = (float(start[0]), float(start[1]))
+    d = (float(dest[0]), float(dest[1]))
+    step_nm = step * 60.0
 
-    openh: list[tuple[float, tuple[float, float]]] = [(heur(start), start)]
-    came: dict[tuple[float, float], tuple[float, float] | None] = {start: None}
-    gscore = {start: 0.0}
+    min_lat = min(s[0], d[0]) - 5.0
+    max_lat = max(s[0], d[0]) + 5.0
+    min_lon = min(s[1], d[1]) - 8.0
+    max_lon = max(s[1], d[1]) + 8.0
+
+    rel_bergs = [
+        b for b in bergs 
+        if min_lat <= b["lat"] <= max_lat and min_lon <= b["lon"] <= max_lon
+    ]
+
+    dx = d[0] - s[0]
+    dy = d[1] - s[1]
+    length = math.hypot(dx, dy) or 1.0
+
+    def heur(n: tuple[float, float]) -> float:
+        return _haversine_nm(n, d) * dist_w
+
+    openh: list[tuple[float, tuple[float, float]]] = [(heur(s), s)]
+    came: dict[tuple[float, float], tuple[float, float] | None] = {s: None}
+    gscore = {s: 0.0}
+    visited: set[tuple[float, float]] = set()
+
     dirs = [
         (step, 0),
         (-step, 0),
@@ -56,69 +85,148 @@ def astar(
         (-step, -step),
     ]
 
-    for _ in range(8000):
+    for _ in range(max_iter):
         if not openh:
             break
         _, current = heapq.heappop(openh)
-        if _haversine_nm(current, dest) < step * 1.6:
-            path = [dest]
-            while current is not None:
-                path.append(current)
-                current = came[current]  # type: ignore[assignment]
-            path.reverse()
-            return path
+        if current in visited:
+            continue
+        visited.add(current)
+
+        if _haversine_nm(current, d) < step_nm * 1.5:
+            if not is_segment_land(current, d):
+                path = [d]
+                curr: tuple[float, float] | None = current
+                while curr is not None:
+                    path.append(curr)
+                    curr = came[curr]
+                path.reverse()
+                return _smooth_path(path, rel_bergs, berg_radius)
+
         for dlat, dlon in dirs:
             nxt = (round(current[0] + dlat, 3), round(current[1] + dlon, 3))
+            
+            if nxt in visited or is_land(nxt[0], nxt[1]):
+                continue
+
             ice = _ice_at(*nxt)
+            berg_pen = _berg_penalty(*nxt, rel_bergs, berg_radius)
+            
+            perp = (dy * (nxt[0] - s[0]) - dx * (nxt[1] - s[1])) / length
+            bias_cost = abs(perp) * corridor_bias
+            
+            step_d = _haversine_nm(current, nxt)
             cost = (
-                dist_w * _haversine_nm(current, nxt)
-                + ice_w * ice * 12
-                + berg_w * _berg_penalty(*nxt, bergs, berg_radius)
+                dist_w * step_d
+                + ice_w * ice * 2.0
+                + berg_w * min(50.0, berg_pen * 0.5)
+                + bias_cost
             )
+            
             tentative = gscore[current] + cost
             if tentative < gscore.get(nxt, 1e18):
                 gscore[nxt] = tentative
                 came[nxt] = current
                 heapq.heappush(openh, (tentative + heur(nxt), nxt))
-    return [start, dest]
+
+    return [s, d]
 
 
-def _offset_path(
-    start: tuple[float, float],
-    dest: tuple[float, float],
-    lat_shift: float,
-    lon_shift: float,
-    n: int = 6,
-) -> list[tuple[float, float]]:
-    pts = [start]
-    for i in range(1, n):
-        t = i / n
-        lat = start[0] + (dest[0] - start[0]) * t + lat_shift * math.sin(math.pi * t)
-        lon = start[1] + (dest[1] - start[1]) * t + lon_shift * math.sin(math.pi * t)
-        pts.append((round(lat, 4), round(lon, 4)))
-    pts.append(dest)
-    return pts
+def _smooth_path(path: list[tuple[float, float]], bergs: list[dict], berg_radius: float) -> list[tuple[float, float]]:
+    """Removes unnecessary zig-zag nodes if direct line-of-sight is land-free and hazard-safe."""
+    if len(path) <= 2:
+        return path
+    smoothed = [path[0]]
+    curr = 0
+    while curr < len(path) - 1:
+        next_idx = curr + 1
+        for test_idx in range(len(path) - 1, curr, -1):
+            if is_segment_land(path[curr], path[test_idx]):
+                continue
+            hazard = False
+            for b in bergs:
+                b_pos = (b["lat"], b["lon"])
+                for s_i in range(1, 8):
+                    t = s_i / 8.0
+                    s_lat = path[curr][0] + (path[test_idx][0] - path[curr][0]) * t
+                    s_lon = path[curr][1] + (path[test_idx][1] - path[curr][1]) * t
+                    if _haversine_nm((s_lat, s_lon), b_pos) < berg_radius:
+                        hazard = True
+                        break
+                if hazard:
+                    break
+            if not hazard:
+                next_idx = test_idx
+                break
+        smoothed.append(path[next_idx])
+        curr = next_idx
+    return smoothed
+
+
+def _calculate_dynamic_risk(pts: list[tuple[float, float]], bergs: list[dict], profile: str) -> float:
+    """Dynamically calculates risk score from actual path points and hazard proximity."""
+    if len(pts) < 2:
+        return 0.50
+
+    total_ice = 0.0
+    max_berg_pen = 0.0
+    total_berg_pen = 0.0
+
+    for p in pts:
+        ice = _ice_at(p[0], p[1])
+        total_ice += ice
+        bp = _berg_penalty(p[0], p[1], bergs, radius_nm=20.0)
+        total_berg_pen += bp
+        if bp > max_berg_pen:
+            max_berg_pen = bp
+
+    avg_ice = total_ice / len(pts)
+    avg_berg = total_berg_pen / len(pts)
+
+    risk = (avg_ice * 0.45) + (min(1.0, max_berg_pen * 0.05) * 0.35) + (min(1.0, avg_berg * 0.02) * 0.20)
+
+    if profile == "safest":
+        risk = max(0.05, min(0.25, risk * 0.5))
+    elif profile == "balanced":
+        risk = max(0.20, min(0.55, risk * 1.0 + 0.15))
+    else:
+        risk = max(0.40, min(0.95, risk * 1.5 + 0.35))
+
+    return round(float(risk), 2)
 
 
 def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> list[dict]:
+    """Generates three distinct routes (Safest, Balanced, Fastest) using land-avoiding A*."""
     s = (float(start[0]), float(start[1]))
     d = (float(dest[0]), float(dest[1]))
-    nearby = sum(1 for b in bergs if _haversine_nm(s, (b["lat"], b["lon"])) < 80)
+
     specs = [
-        ("safest", "Safest", -0.55, 0.35, 9.5, 0.12),
-        ("balanced", "Balanced", -0.22, 0.12, 12.5, 0.31),
-        ("fastest", "Fastest", 0.04, -0.05, 16.0, min(0.9, 0.5 + nearby * 0.01)),
+        ("safest", "Safest", 10.0, 50.0, 1.0, 35.0, 0.8, 9.5),
+        ("balanced", "Balanced", 2.0, 10.0, 1.0, 15.0, 0.0, 12.5),
+        ("fastest", "Fastest", 0.2, 1.0, 1.0, 5.0, -0.3, 16.0),
     ]
+
     out = []
-    for rid, name, dlat, dlon, speed, risk in specs:
-        # Full grid A* is O(iterations × icebergs) and timed out on 38 bergs.
-        # Distinct offset corridors still avoid ice by shifting south; A* remains
-        # available for smaller local repairs.
-        pts = _offset_path(s, d, dlat, dlon)
+    for rid, name, ice_w, berg_w, dist_w, berg_radius, bias, speed in specs:
+        raw_pts = astar(
+            start=s,
+            dest=d,
+            bergs=bergs,
+            ice_w=ice_w,
+            berg_w=berg_w,
+            dist_w=dist_w,
+            berg_radius=berg_radius,
+            step=0.20,
+            corridor_bias=bias,
+        )
+
         nm = 0.0
-        for a, b in zip(pts, pts[1:]):
+        for a, b in zip(raw_pts, raw_pts[1:]):
             nm += _haversine_nm(a, b)
+
         eta = nm / speed if speed else nm
+        dynamic_risk = _calculate_dynamic_risk(raw_pts, bergs, rid)
+
         out.append(
             {
                 "id": rid,
@@ -126,8 +234,9 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
                 "distanceNm": round(nm, 1),
                 "etaHours": round(eta, 1),
                 "fuelMt": round(nm * 0.14, 1),
-                "riskScore": risk,
-                "points": [{"lat": p[0], "lon": p[1]} for p in pts],
+                "riskScore": dynamic_risk,
+                "points": [{"lat": round(p[0], 4), "lon": round(p[1], 4)} for p in raw_pts],
             }
         )
+
     return out

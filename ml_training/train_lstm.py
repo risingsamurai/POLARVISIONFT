@@ -1,7 +1,9 @@
-"""Train a PyTorch LSTM model on physics-informed synthetic drift trajectories.
+"""Train a PyTorch hybrid LSTM model on real BYU historical iceberg trajectories.
 
-Inputs: Sequence of 14 days of [lat, lon, wind_u, wind_v, current_u, current_v] (centered).
-Outputs: Predicted relative lat/lon offsets at t+24h, t+48h, t+72h.
+Inputs:
+  - Sequence (14 days): [lat, lon, wind_u, wind_v, current_u, current_v] (centered coordinates).
+  - Static Feature: size_nm (iceberg diameter in NM).
+Outputs: Predicted relative lat/lon displacements at t+24h, t+48h, t+72h.
 """
 
 from __future__ import annotations
@@ -14,123 +16,151 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# Paths
 ROOT = Path(__file__).resolve().parents[1]
-DATASET_PATH = Path(__file__).parent / "synthetic_drift_dataset.csv"
+DATASET_PATH = Path(__file__).parent / "real_historical_trajectories.csv"
 MODEL_PATH = ROOT / "backend" / "ml" / "lstm_weights.pt"
+CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "lstm_weights.pt"
 
 
-class IcebergLSTM(nn.Module):
-    def __init__(self, input_size=6, hidden_size=32, num_layers=1, output_size=6):
+class HybridIcebergLSTM(nn.Module):
+    def __init__(self, seq_input_size=6, static_input_size=1, hidden_size=32, output_size=6):
         super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, output_size)
-        
-    def forward(self, x):
-        # x shape: (batch_size, seq_len=14, input_size=6)
-        out, _ = self.lstm(x)
-        # Take the output of the last time step
-        last_out = out[:, -1, :]
-        preds = self.fc(last_out)
+        self.lstm = nn.LSTM(seq_input_size, hidden_size, num_layers=1, batch_first=True)
+        self.size_fc = nn.Linear(static_input_size, 8)
+        self.relu = nn.ReLU()
+        self.fc1 = nn.Linear(hidden_size + 8, 32)
+        self.fc2 = nn.Linear(32, output_size)
+
+    def forward(self, x_seq, x_static):
+        out, _ = self.lstm(x_seq)
+        last_out = out[:, -1, :]  # (batch, 32)
+        size_emb = self.relu(self.size_fc(x_static))  # (batch, 8)
+        combined = torch.cat([last_out, size_emb], dim=1)  # (batch, 40)
+        h = self.relu(self.fc1(combined))
+        preds = self.fc2(h)  # (batch, 6)
         return preds
 
 
-def prepare_sequences(df: pd.DataFrame, iceberg_ids: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-    X_list = []
+def prepare_historical_dataset(df: pd.DataFrame, iceberg_ids: list[str]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    X_seq_list = []
+    X_static_list = []
     Y_list = []
-    
-    for berg_id in iceberg_ids:
-        berg_df = df[df["iceberg_id"] == berg_id].sort_values("day")
-        # Ensure we have a complete 30-day sequence
-        if len(berg_df) < 30:
+
+    target_ids = set(iceberg_ids)
+    grouped = df.groupby("iceberg_id")
+
+    for berg_id in target_ids:
+        if berg_id not in grouped.groups:
             continue
-            
+        berg_df = grouped.get_group(berg_id).sort_values("date")
+        if len(berg_df) < 17:
+            continue
+
         coords = berg_df[["lat", "lon", "wind_u", "wind_v", "current_u", "current_v"]].values
-        
-        # Overlapping 17-day windows
-        # Day 0 to 16, Day 1 to 17, ..., Day 13 to 29
-        for start_idx in range(30 - 17 + 1):
-            window = coords[start_idx : start_idx + 17] # shape: (17, 6)
-            
-            # Input sequence: first 14 steps
-            seq = window[:14].copy() # shape: (14, 6)
-            
-            # Last known position in the input sequence
+        sizes = berg_df["size_nm"].values
+
+        # Sample windows with stride 10 for fast, clean CPU training
+        for start_idx in range(0, len(berg_df) - 17 + 1, 10):
+            window_coords = coords[start_idx : start_idx + 17]
+            window_sizes = sizes[start_idx : start_idx + 17]
+
+            seq = window_coords[:14].copy()
             last_lat = seq[-1, 0]
             last_lon = seq[-1, 1]
-            
-            # Center coordinates around the last step
+
+            # Center lat/lon around the last time step
             seq[:, 0] -= last_lat
             seq[:, 1] -= last_lon
-            
-            # Target output: relative lat/lon displacements for days 14, 15, 16
-            target_lat_24 = window[14, 0] - last_lat
-            target_lon_24 = window[14, 1] - last_lon
-            target_lat_48 = window[15, 0] - last_lat
-            target_lon_48 = window[15, 1] - last_lon
-            target_lat_72 = window[16, 0] - last_lat
-            target_lon_72 = window[16, 1] - last_lon
-            
+
+            # Static size feature (normalized by dividing by 10.0)
+            mean_size = float(np.mean(window_sizes[:14])) / 10.0
+
+            # Target 24h, 48h, 72h displacements
+            target_lat_24 = window_coords[14, 0] - last_lat
+            target_lon_24 = window_coords[14, 1] - last_lon
+            target_lat_48 = window_coords[15, 0] - last_lat
+            target_lon_48 = window_coords[15, 1] - last_lon
+            target_lat_72 = window_coords[16, 0] - last_lat
+            target_lon_72 = window_coords[16, 1] - last_lon
+
             target = np.array([
                 target_lat_24, target_lon_24,
                 target_lat_48, target_lon_48,
                 target_lat_72, target_lon_72
             ], dtype=np.float32)
-            
-            X_list.append(seq.astype(np.float32))
+
+            # Filter unrealistic jumps (teleportation artifacts)
+            if np.max(np.abs(target)) > 5.0:
+                continue
+
+            X_seq_list.append(seq.astype(np.float32))
+            X_static_list.append(np.array([mean_size], dtype=np.float32))
             Y_list.append(target)
-            
-    return torch.tensor(np.array(X_list)), torch.tensor(np.array(Y_list))
+
+    return (
+        torch.tensor(np.array(X_seq_list)),
+        torch.tensor(np.array(X_static_list)),
+        torch.tensor(np.array(Y_list))
+    )
 
 
 def train():
     if not DATASET_PATH.exists():
-        raise FileNotFoundError(f"Missing dataset at {DATASET_PATH}. Run generate_synthetic_trajectories.py first.")
-        
+        raise FileNotFoundError(f"Missing dataset at {DATASET_PATH}. Run parse_byu_historical.py first.")
+
+    print(f"Loading dataset from {DATASET_PATH}...")
     df = pd.read_csv(DATASET_PATH)
     unique_ids = sorted(df["iceberg_id"].unique())
-    
-    # Train on first 30 icebergs, hold out last 8 for evaluation
-    train_ids = unique_ids[:30]
-    print(f"Training on {len(train_ids)} icebergs, holding out {len(unique_ids) - len(train_ids)} for evaluation.")
-    
-    X_train, Y_train = prepare_sequences(df, train_ids)
-    print(f"Dataset prepared. X_train shape: {X_train.shape}, Y_train shape: {Y_train.shape}")
-    
-    # Initialize Model, Loss, and Optimizer
-    model = IcebergLSTM()
+
+    # Reserve 15% of icebergs for holdout evaluation
+    np.random.seed(42)
+    shuffled_ids = np.random.permutation(unique_ids)
+    split_idx = int(len(shuffled_ids) * 0.85)
+
+    train_ids = shuffled_ids[:split_idx]
+    holdout_ids = shuffled_ids[split_idx:]
+
+    print(f"Training on {len(train_ids)} historical icebergs, holding out {len(holdout_ids)} for evaluation.")
+
+    X_seq_train, X_static_train, Y_train = prepare_historical_dataset(df, list(train_ids))
+    print(f"Dataset prepared. X_seq: {X_seq_train.shape}, X_static: {X_static_train.shape}, Y: {Y_train.shape}")
+
+    model = HybridIcebergLSTM()
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.005)
-    
-    epochs = 100
-    batch_size = 32
-    
-    print("Starting LSTM training...")
+    optimizer = optim.Adam(model.parameters(), lr=0.003)
+
+    epochs = 40
+    batch_size = 256
+
+    print("\nStarting Hybrid PyTorch LSTM Training on Real BYU Historical Data...")
     for epoch in range(1, epochs + 1):
         model.train()
-        permutation = torch.randperm(X_train.size(0))
+        permutation = torch.randperm(X_seq_train.size(0))
         epoch_loss = 0.0
-        
-        for i in range(0, X_train.size(0), batch_size):
+
+        for i in range(0, X_seq_train.size(0), batch_size):
             indices = permutation[i : i + batch_size]
-            batch_x, batch_y = X_train[indices], Y_train[indices]
-            
+            b_seq, b_stat, b_y = X_seq_train[indices], X_static_train[indices], Y_train[indices]
+
             optimizer.zero_grad()
-            preds = model(batch_x)
-            loss = criterion(preds, batch_y)
+            preds = model(b_seq, b_stat)
+            loss = criterion(preds, b_y)
             loss.backward()
             optimizer.step()
-            
-            epoch_loss += loss.item() * batch_x.size(0)
-            
-        epoch_loss /= X_train.size(0)
-        if epoch == 1 or epoch % 10 == 0:
+
+            epoch_loss += loss.item() * b_seq.size(0)
+
+        epoch_loss /= X_seq_train.size(0)
+        if epoch == 1 or epoch % 10 == 0 or epoch == epochs:
             print(f"Epoch {epoch:03d}/{epochs:03d} | Loss: {epoch_loss:.6f}")
-            
-    # Save trained model weights
+
+    # Save model weights to both backend and checkpoints
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
     torch.save(model.state_dict(), MODEL_PATH)
-    print(f"Successfully saved LSTM weights to {MODEL_PATH}")
+    torch.save(model.state_dict(), CHECKPOINT_PATH)
+    print(f"\nSuccessfully saved trained LSTM weights to:\n - {MODEL_PATH}\n - {CHECKPOINT_PATH}")
 
 
 if __name__ == "__main__":

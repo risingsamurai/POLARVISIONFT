@@ -1,6 +1,7 @@
+import asyncio
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,17 +9,17 @@ from data.byu_scraper import run as scrape_byu
 from data.era5_fetcher import run as fetch_era5
 from data.nsidc_fetcher import run as fetch_nsidc
 from db.models import iceberg_count, init_db, upsert_icebergs
-from db.redis_cache import set_json
+from db.redis_cache import get_json, set_json
 from routers import alerts, health, ice, icebergs, routing, telemetry
 
 import os
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(), override=True)
 
-scheduler = BackgroundScheduler()
+scheduler = AsyncIOScheduler()
 
 
-def ingest_all() -> None:
+async def ingest_all() -> None:
     init_db()
     if os.getenv("OFFLINE_STARTUP", "").lower() == "true":
         import json
@@ -68,24 +69,70 @@ def ingest_all() -> None:
         )
         return
 
-    byu = scrape_byu()
-    upsert_icebergs(byu["icebergs"], live=byu["status"] == "LIVE")
-    nsidc = fetch_nsidc()
-    era5 = fetch_era5()
-    set_json(
-        "data_reality",
-        {
-            "byu": {"status": byu["status"], "count": byu["count"], "error": byu.get("error")},
-            "nsidc": nsidc,
-            "era5": era5,
-        },
-    )
+    loop = asyncio.get_running_loop()
+
+    def update_reality(key: str, data: dict):
+        reality = get_json("data_reality") or {
+            "byu": {"status": "FALLBACK", "count": 0, "error": None},
+            "nsidc": {"status": "FALLBACK", "live": False, "error": None},
+            "era5": {"status": "FALLBACK", "live": False, "error": None},
+        }
+        reality[key] = data
+        print(f"[INGEST] Updating reality for {key}: {data}")
+        set_json("data_reality", reality)
+
+    async def run_byu():
+        print("[INGEST] Starting BYU scraper...")
+        try:
+            byu = await loop.run_in_executor(None, scrape_byu)
+            print(f"[INGEST] BYU scraper completed with status {byu['status']}")
+            # Upsert into database
+            await loop.run_in_executor(None, upsert_icebergs, byu["icebergs"], byu["status"] == "LIVE")
+            update_reality(
+                "byu",
+                {"status": byu["status"], "count": byu["count"], "error": byu.get("error")}
+            )
+        except Exception as e:
+            print(f"[INGEST] BYU scraper failed: {e}")
+            update_reality(
+                "byu",
+                {"status": "FALLBACK", "count": 0, "error": f"Scraper execution error: {e}"}
+            )
+
+    async def run_nsidc():
+        print("[INGEST] Starting NSIDC fetcher...")
+        try:
+            nsidc = await loop.run_in_executor(None, fetch_nsidc)
+            print(f"[INGEST] NSIDC fetcher completed with status {nsidc.get('status')}")
+            update_reality("nsidc", nsidc)
+        except Exception as e:
+            print(f"[INGEST] NSIDC fetcher failed: {e}")
+            update_reality(
+                "nsidc",
+                {"status": "FALLBACK", "error": f"Fetcher execution error: {e}"}
+            )
+
+    async def run_era5():
+        print("[INGEST] Starting ERA5 fetcher...")
+        try:
+            era5 = await loop.run_in_executor(None, fetch_era5)
+            print(f"[INGEST] ERA5 fetcher completed with status {era5.get('status')}")
+            update_reality("era5", era5)
+        except Exception as e:
+            print(f"[INGEST] ERA5 fetcher failed: {e}")
+            update_reality(
+                "era5",
+                {"status": "FALLBACK", "error": f"Fetcher execution error: {e}"}
+            )
+
+    await asyncio.gather(run_byu(), run_nsidc(), run_era5())
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
-    ingest_all()
+    # Trigger ingestion in the background so startup isn't blocked
+    asyncio.create_task(ingest_all())
     
     interval_hours = int(os.getenv("INGEST_INTERVAL_HOURS", 6))
     scheduler.add_job(ingest_all, "interval", hours=interval_hours, id="ingest")

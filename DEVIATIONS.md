@@ -72,3 +72,20 @@ Alert banner + CRITICAL cooldown when range < 5 nm. Thresholds loaded from `back
 - **Inference Integration:** Updated `lstm_predictor.py` to dynamically reconstruct the past 14 days of history. It queries SQLite `iceberg_history` table for real position logs and falls back to physics-informed backward simulation where logs are incomplete or unavailable.
 - **Real History Accumulation:** Wired `byu_scraper.py` to append positional snapshot logs to `backend/data/cache/byu_history.jsonl` on each run. The APScheduler background job was wired to respect `INGEST_INTERVAL_HOURS` in `.env` for history collection going forward.
 
+### Real BYU Historical Trajectory Retraining & Size Feature Integration (2026-09-06)
+- **Dataset Source:** Downloaded and unzipped BYU Scatterometer Climate Record iceberg database (`consolidated_database_v8.0.zip`). Created `ml_training/parse_byu_historical.py` to parse tracking files (`*.qscat`), extracting 516,646 real trajectory records across 646 unique icebergs spanning multi-year satellite observation histories.
+- **Iceberg Size Feature:** Derived static iceberg equivalent diameter `size_nm = sqrt(size_1 * size_2)` where `size_1` (major axis) and `size_2` (minor axis) are recorded in Nautical Miles in the BYU dataset headers.
+- **Hybrid Architecture:** Built `HybridIcebergLSTM` (`ml_training/train_lstm.py`), concatenating the LSTM sequence output (14-day history of centered lat/lon + ERA5 wind + ACC ocean current) with an embedding layer for static `size_nm`.
+- **Holdout Evaluation (97 Unobserved Icebergs, 23,746 Evaluation Windows):**
+  - **24h Horizon:** Mean error **3.20 km** (Median **0.93 km**)
+  - **48h Horizon:** Mean error **5.43 km** (Median **1.50 km**)
+  - **72h Horizon:** Mean error **7.79 km** (Median **2.26 km**)
+- **Ablation Study (With vs. Without Iceberg Size Feature):**
+  - Without `size_nm` (size = 0.0): 24h Mean **3.26 km**, 48h Mean **5.46 km**, 72h Mean **7.81 km**
+  - With `size_nm`: 24h Mean **3.20 km**, 48h Mean **5.43 km**, 72h Mean **7.79 km**
+  - *Result:* Incorporating static iceberg diameter systematically improves positional accuracy across all prediction horizons on unobserved test icebergs.
+- **Inference & Live Fallback:**
+  - 36 of 38 live icebergs matched real BYU historical tracking files.
+  - The 2 unmatched live icebergs (**`B51`** and **`D15D`**) use physics-informed backward simulation to construct the initial 14-day sequence while supplying live `diameterNm` into the `HybridIcebergLSTM` static size projection layer. Verified that live inference executes smoothly without errors or missing data for all 38 icebergs.
+
+

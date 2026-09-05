@@ -71,10 +71,30 @@ def fetch_era5_live(area=None):
         "area": area or [-60, -80, -75, -30],
         "data_format": "netcdf",
     }
-    target = str(Path(__file__).parent / "cache" / "era5_latest.nc")
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    client.retrieve(dataset, request, target)
-    return target
+    target = Path(__file__).parent / "cache" / "era5_latest.nc"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target_tmp = target.with_suffix(".nc.tmp")
+    
+    try:
+        if target_tmp.exists():
+            target_tmp.unlink(missing_ok=True)
+    except Exception:
+        pass
+        
+    client.retrieve(dataset, request, str(target_tmp))
+    
+    try:
+        if target.exists():
+            target.unlink(missing_ok=True)
+    except Exception:
+        pass
+        
+    try:
+        target_tmp.replace(target)
+    except Exception:
+        target = target_tmp
+        
+    return str(target)
 
 
 def run() -> dict:
