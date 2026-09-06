@@ -2,16 +2,16 @@
 
 AI-enabled Antarctic sea-ice, iceberg trajectory and navigation decision support for Smart India Hackathon **PS 26059** (MoES / NCPOR).
 
-## Honest status (this machine, 2026-08-28)
+## Honest status (this machine, 2026-09-07)
 
 | Piece | Status |
 |---|---|
 | BYU/NIC icebergs | **LIVE** — 38 named bergs scraped from scp.byu.edu |
-| NSIDC ice grids | FALLBACK — no Earthdata login |
-| ERA5 wind/current | FALLBACK — no CDS key |
+| NSIDC ice grids | LIVE when Earthdata credentials are set |
+| ERA5 wind/current | **LIVE** — CDS NetCDF `backend/data/cache/era5_latest.nc` (u10/v10); APScheduler ingest every `INGEST_INTERVAL_HOURS` |
 | IceNet U-Net | Not loaded — persistence/climatology ensemble |
-| Trajectory model | Least-squares drift head (not PyTorch LSTM) |
-| Docker Compose | Files present; Docker not installed here |
+| Trajectory model | HybridIcebergLSTM (`backend/ml/lstm_weights.pt`) trained on merged real-historical BYU + physics-informed synthetic tracks. Historical training wind/current are parameterized, not dated ERA5. Live inference wind is current ERA5. See `DEVIATIONS.md`. |
+| Docker Compose | Files present; Docker not required for local SQLite run |
 
 See `DATA_SOURCES.md` and `DEVIATIONS.md`.
 

@@ -1,4 +1,4 @@
-"""Train a PyTorch hybrid LSTM model on real BYU historical iceberg trajectories.
+"""Train a PyTorch hybrid LSTM model on merged real-historical + synthetic trajectories.
 
 Inputs:
   - Sequence (14 days): [lat, lon, wind_u, wind_v, current_u, current_v] (centered coordinates).
@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 ROOT = Path(__file__).resolve().parents[1]
-DATASET_PATH = Path(__file__).parent / "real_historical_trajectories.csv"
+DATASET_PATH = Path(__file__).parent / "merged_trajectories.csv"
 MODEL_PATH = ROOT / "backend" / "ml" / "lstm_weights.pt"
 CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "lstm_weights.pt"
 
@@ -106,7 +106,7 @@ def prepare_historical_dataset(df: pd.DataFrame, iceberg_ids: list[str]) -> tupl
 
 def train():
     if not DATASET_PATH.exists():
-        raise FileNotFoundError(f"Missing dataset at {DATASET_PATH}. Run parse_byu_historical.py first.")
+        raise FileNotFoundError(f"Missing dataset at {DATASET_PATH}.")
 
     print(f"Loading dataset from {DATASET_PATH}...")
     df = pd.read_csv(DATASET_PATH)
@@ -120,7 +120,8 @@ def train():
     train_ids = shuffled_ids[:split_idx]
     holdout_ids = shuffled_ids[split_idx:]
 
-    print(f"Training on {len(train_ids)} historical icebergs, holding out {len(holdout_ids)} for evaluation.")
+    print(f"Training on {len(train_ids)} icebergs, holding out {len(holdout_ids)} for evaluation.")
+    print(f"Source counts in full dataset: {df.groupby('source')['iceberg_id'].nunique().to_dict() if 'source' in df.columns else 'n/a'}")
 
     X_seq_train, X_static_train, Y_train = prepare_historical_dataset(df, list(train_ids))
     print(f"Dataset prepared. X_seq: {X_seq_train.shape}, X_static: {X_static_train.shape}, Y: {Y_train.shape}")
@@ -132,7 +133,7 @@ def train():
     epochs = 40
     batch_size = 256
 
-    print("\nStarting Hybrid PyTorch LSTM Training on Real BYU Historical Data...")
+    print("\nStarting Hybrid PyTorch LSTM Training on merged trajectories...")
     for epoch in range(1, epochs + 1):
         model.train()
         permutation = torch.randperm(X_seq_train.size(0))

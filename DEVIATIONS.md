@@ -88,4 +88,29 @@ Alert banner + CRITICAL cooldown when range < 5 nm. Thresholds loaded from `back
   - 36 of 38 live icebergs matched real BYU historical tracking files.
   - The 2 unmatched live icebergs (**`B51`** and **`D15D`**) use physics-informed backward simulation to construct the initial 14-day sequence while supplying live `diameterNm` into the `HybridIcebergLSTM` static size projection layer. Verified that live inference executes smoothly without errors or missing data for all 38 icebergs.
 
+### Merged training set, live ERA5 cache, retraining (2026-09-07)
+
+**Why `era5_latest.nc` was missing:** `OFFLINE_STARTUP` was not set. APScheduler/`ingest_all` **did** call `era5_fetcher.run()` at uvicorn startup. That call failed with `CDS_API_KEY environment variable is not set` because repo `.env` was **empty (0 bytes)**. Fallback wrote `era5.json` climatology only; `fetch_era5_live()` never wrote the NetCDF, so live LSTM wind silently used `(3.6, -2.2)`.
+
+**Fix:** Restored `.env` (gitignored), pointed `era5_fetcher.py` at the repo-root `.env` path, ran `run()` (not offline mode). CDS request `92cde1af-a4c1-4bac-8205-06733a47c527` succeeded. File `backend/data/cache/era5_latest.nc` exists (242,614 bytes, 2026-09-07 01:11:35). For iceberg **A76C** (−53.55, −29.95) live `get_era5_wind` returned **u10=7.7468, v10=0.5742** (not the fallback). Nearby point differed (6.8101, 2.4565). Scheduler remains `ingest_all` every `INGEST_INTERVAL_HOURS` (default 6) in `backend/main.py` lifespan.
+
+**Windowing check before merge:** `prepare_historical_dataset()` sorts each iceberg by `date` and takes adjacent 17-row windows. It does **not** require calendar alignment across icebergs or 1-day gaps. Synthetic uses `day` 0–29; merged file maps that to `2000-01-01 + day` so sort order matches chronology. **36** live names overlap historical `iceberg_id`s; merged synthetic IDs are prefixed `syn_` so sources are not mixed in one trajectory.
+
+**Training (merged, same architecture/hyperparameters, seed 42, 85/15):** 581 train / 103 holdout icebergs. `X_seq` (43655, 14, 6). Loss: epoch 1 **0.031165**, 10 **0.024791**, 20 **0.023227**, 30 **0.022473**, 40 **0.021653**.
+
+**Holdout evaluation (24,109 windows):**
+
+- Overall with size — mean km: 24h **3.20**, 48h **5.82**, 72h **8.19**; median: **0.86 / 2.04 / 2.87**
+- Ablation size=0 — mean km: 24h **11.30**, 48h **15.22**, 72h **17.03**; median: **10.07 / 13.65 / 14.46**
+- `real_historical` (24,089 windows) with size — mean **3.20 / 5.82 / 8.19**; median **0.85 / 2.04 / 2.87**
+- `synthetic_physics` (20 windows) with size — mean **2.52 / 3.87 / 5.13**; median **2.54 / 4.14 / 5.03**
+
+**Known limitations (flagged, not hidden):**
+
+1. Historical training wind/current are **location-parameterized**, not dated ERA5. Full 51-year / 14,421-date CDS backfill was judged impractical (queued bulk requests) in the project timeline. Live inference **does** use current ERA5 wind; do not confuse the two.
+2. Ocean current is a parameterized ACC (live/synthetic) or lat/lon trig (historical rows), not measured current, in both training and live.
+3. **Size ablation is lopsided:** zeroing `size_nm` at eval now ~11–17 km mean error vs ~3–8 km with size (previously the gap was ~0.06 km). The merged model is strongly size-dependent; ablation is not a small robustness check anymore.
+4. Synthetic holdout is only **20 windows** vs 24,089 real — per-source synthetic numbers are noisy. Synthetic error is **not** near-zero (good), but the sample is too small to treat as a strong domain result.
+5. Synthetic tracks lack real size; merged fill `size_nm=1.5`.
+
 

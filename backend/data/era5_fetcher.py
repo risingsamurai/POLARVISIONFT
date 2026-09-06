@@ -11,10 +11,11 @@ from pathlib import Path
 
 import cdsapi
 import xarray as xr
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv(find_dotenv(), override=True)
+# Load repo-root .env (uvicorn cwd / find_dotenv can miss an empty or distant .env)
+_ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(_ROOT_ENV, override=True)
 
 SAMPLE_PATH = Path(__file__).parent / "samples" / "era5_sample.json"
 CACHE_PATH = Path(__file__).parent / "cache" / "era5.json"
