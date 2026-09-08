@@ -80,34 +80,13 @@ export default function SimulationPage() {
     fetchIcebergs()
       .then((data) => {
         if (data.icebergs?.length) {
-          const withDebris = [
-            ...data.icebergs.map((ib) => ({
-              ...ib,
-              headingDeg: ib.headingDeg ?? 90,
-              predictedPath: ib.predictedPath ?? [],
-            })),
-            {
-              id: "DEB-GHOSTNET-01",
-              name: "GHOST-NET",
-              lat: -68.33,
-              lon: -52.2,
-              diameterNm: 0.2,
-              sizeClass: "small" as const,
-              status: "tracked" as const,
-              highRisk: true,
-              dangerRadiusNm: 4,
-              headingDeg: 0,
-              predictedPath: [],
-            },
-          ];
-          setIcebergs(withDebris);
-          pushDetection({
-            name: "GHOST-NET",
-            confidence: 0.91,
-            distanceNm: 6.2,
-            lat: -68.33,
-            lon: -52.2,
-          });
+          const processedIcebergs = data.icebergs.map((ib) => ({
+            ...ib,
+            headingDeg: ib.headingDeg ?? 90,
+            predictedPath: ib.predictedPath ?? [],
+          }));
+          setIcebergs(processedIcebergs);
+          
           const API = process.env.NEXT_PUBLIC_API_URL ?? "";
           fetch(`${API}/api/status`)
             .then((res) => {

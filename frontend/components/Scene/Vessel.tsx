@@ -243,10 +243,12 @@ export function Vessel() {
       },
       { d: 999, ib: icebergs[0] }
     );
-    if (nearest.ib && nearest.d < 12 && Math.random() < dt * 0.4) {
+    
+    // Increased detection range and frequency for better visibility
+    if (nearest.ib && nearest.d < 15 && Math.random() < dt * 0.6) {
       pushDetection({
         name: nearest.ib.name,
-        confidence: 0.82 + Math.random() * 0.15,
+        confidence: 0.75 + Math.random() * 0.2,
         distanceNm: +nearest.d.toFixed(1),
         lat: nearest.ib.lat,
         lon: nearest.ib.lon,

@@ -82,7 +82,7 @@ export function RouteLine() {
         <lineBasicMaterial
           color="#10b981"
           transparent
-          opacity={0.5}
+          opacity={0.6}
           linewidth={2}
         />
       </line>
@@ -99,22 +99,39 @@ export function RouteLine() {
         </bufferGeometry>
         <pointsMaterial
           color="#34d399"
-          size={1.25}
+          size={1.5}
           transparent
-          opacity={0.92}
+          opacity={0.95}
           sizeAttenuation
         />
       </points>
 
+      {/* Waypoint markers along the route */}
+      {route?.points && route.points.map((pt, i) => {
+        const [px, , pz] = latLonToScene(pt.lat, pt.lon);
+        return (
+          <group key={i} position={[px, 0.6, pz]}>
+            <mesh rotation={[-Math.PI / 2, 0, 0]}>
+              <ringGeometry args={[0.6, 1.0, 16]} />
+              <meshBasicMaterial color="#10b981" transparent opacity={0.5} />
+            </mesh>
+            <mesh position={[0, 0.2, 0]}>
+              <sphereGeometry args={[0.25, 8, 8]} />
+              <meshBasicMaterial color="#34d399" />
+            </mesh>
+          </group>
+        );
+      })}
+
       {/* Destination Target Beacon */}
       <group position={destScenePos}>
         <mesh rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[1.8, 2.2, 32]} />
-          <meshBasicMaterial color="#10b981" transparent opacity={0.8} />
+          <ringGeometry args={[2.0, 2.5, 32]} />
+          <meshBasicMaterial color="#10b981" transparent opacity={0.7} />
         </mesh>
-        <mesh position={[0, 1.8, 0]}>
-          <cylinderGeometry args={[0.15, 0.15, 3.6, 12]} />
-          <meshBasicMaterial color="#34d399" transparent opacity={0.7} />
+        <mesh position={[0, 2.0, 0]}>
+          <cylinderGeometry args={[0.18, 0.18, 4.0, 12]} />
+          <meshBasicMaterial color="#34d399" transparent opacity={0.8} />
         </mesh>
       </group>
     </group>

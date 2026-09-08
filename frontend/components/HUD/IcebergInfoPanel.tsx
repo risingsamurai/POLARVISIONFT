@@ -1,12 +1,23 @@
 "use client";
 
 import { usePolarisStore } from "@/lib/store";
+import { useMemo } from "react";
 
 export function IcebergInfoPanel() {
   const id = usePolarisStore((s) => s.selectedIcebergId);
   const icebergs = usePolarisStore((s) => s.icebergs);
+  const vessel = usePolarisStore((s) => s.vessel);
   const select = usePolarisStore((s) => s.selectIceberg);
   const iceberg = icebergs.find((i) => i.id === id);
+
+  // Calculate distance from vessel to selected iceberg
+  const distance = useMemo(() => {
+    if (!iceberg || !vessel) return null;
+    const dlat = iceberg.lat - vessel.lat;
+    const dlon = iceberg.lon - vessel.lon;
+    const distanceNm = Math.sqrt(dlat * dlat + dlon * dlon) * 60;
+    return distanceNm.toFixed(2);
+  }, [iceberg, vessel]);
 
   return (
     <section className="hud-panel p-3.5 w-72 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white shadow-xl pointer-events-auto">
@@ -17,7 +28,9 @@ export function IcebergInfoPanel() {
         {icebergs.length > 0 && (
           <select
             value={id ?? ""}
-            onChange={(e) => select(e.target.value || null)}
+            onChange={(e) => {
+              select(e.target.value || null);
+            }}
             className="bg-black/60 text-cyan-300 text-[10px] font-mono border border-cyan-500/30 rounded px-1.5 py-0.5 outline-none cursor-pointer truncate max-w-[140px]"
           >
             <option value="">Select Target...</option>
@@ -43,6 +56,10 @@ export function IcebergInfoPanel() {
           </dd>
           <dt className="text-white/45 text-[11px]">Designation</dt>
           <dd className="font-semibold text-white/90">{iceberg.name}</dd>
+          <dt className="text-white/45 text-[11px]">Distance</dt>
+          <dd className="tabular-nums font-mono text-white/90">
+            {distance} NM
+          </dd>
           <dt className="text-white/45 text-[11px]">Diameter</dt>
           <dd className="tabular-nums font-mono text-white/90">
             {iceberg.diameterNm.toFixed(1)} NM
@@ -58,6 +75,10 @@ export function IcebergInfoPanel() {
           <dt className="text-white/45 text-[11px]">Drift Heading</dt>
           <dd className="tabular-nums font-mono text-[11px] text-white/80">
             {iceberg.headingDeg.toFixed(0)}°
+          </dd>
+          <dt className="text-white/45 text-[11px]">Status</dt>
+          <dd className="uppercase text-[11px] font-semibold text-white/90">
+            {iceberg.status}
           </dd>
           {iceberg.predictedPath && iceberg.predictedPath.length > 1 && (
             <>
