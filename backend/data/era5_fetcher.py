@@ -69,7 +69,7 @@ def fetch_era5_live(area=None):
         "month": [target_date.strftime("%m")],
         "day": [target_date.strftime("%d")],
         "time": ["00:00", "06:00", "12:00", "18:00"],
-        "area": area or [-60, -80, -75, -30],
+        "area": area or [-50, -180, -78, 180],
         "data_format": "netcdf",
     }
     target = Path(__file__).parent / "cache" / "era5_latest.nc"
@@ -110,14 +110,14 @@ def run() -> dict:
             lat_name = 'latitude' if 'latitude' in ds.coords else 'lat'
             lon_name = 'longitude' if 'longitude' in ds.coords else 'lon'
             
-            # Select first time index if time-like dimension is present
+            # Select latest time index if time-like dimension is present
             time_dim = None
             for dim in ['valid_time', 'time', 'forecast_time']:
                 if dim in ds.dims:
                     time_dim = dim
                     break
             if time_dim:
-                ds_time = ds.isel({time_dim: 0})
+                ds_time = ds.isel({time_dim: -1})
             else:
                 ds_time = ds
                 

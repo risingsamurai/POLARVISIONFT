@@ -7,12 +7,15 @@ and uses static iceberg size (NM) alongside trajectory features for ML predictio
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import sqlite3
 from pathlib import Path
 import numpy as np
 import xarray as xr
+
+logger = logging.getLogger(__name__)
 
 try:
     import torch
@@ -64,8 +67,8 @@ def get_model():
         if MODEL_PATH.exists():
             try:
                 _model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(f"Failed to load LSTM weights from {MODEL_PATH}: {type(e).__name__}: {e}")
         _model.eval()
     return _model
 
@@ -86,9 +89,17 @@ def get_era5_wind(ds: xr.Dataset | None, lat: float, lon: float) -> tuple[float,
     if ds is None:
         return 3.6, -2.2
     try:
-        clamped_lat = max(-75.0, min(-60.0, lat))
-        clamped_lon = max(-80.0, min(-30.0, lon))
-        pt = ds.sel(latitude=clamped_lat, longitude=clamped_lon, method="nearest")
+        # Get actual bounds from the dataset dynamically
+        lat_name = 'latitude' if 'latitude' in ds.coords else 'lat'
+        lon_name = 'longitude' if 'longitude' in ds.coords else 'lon'
+        
+        lat_bounds = float(ds[lat_name].min()), float(ds[lat_name].max())
+        lon_bounds = float(ds[lon_name].min()), float(ds[lon_name].max())
+        
+        clamped_lat = max(lat_bounds[0], min(lat_bounds[1], lat))
+        clamped_lon = max(lon_bounds[0], min(lon_bounds[1], lon))
+        
+        pt = ds.sel({lat_name: clamped_lat, lon_name: clamped_lon}, method="nearest")
         u = float(pt['u10'].mean()) if 'u10' in pt else 0.0
         v = float(pt['v10'].mean()) if 'v10' in pt else 0.0
         return u, v
@@ -194,6 +205,7 @@ def predict(
                 else:
                     preds = np.zeros(6, dtype=np.float32)
         except Exception as e:
+            logger.exception(f"LSTM inference failed for iceberg {name}: {type(e).__name__}: {e}")
             preds = np.zeros(6, dtype=np.float32)
     else:
         preds = np.zeros(6, dtype=np.float32)
