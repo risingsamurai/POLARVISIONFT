@@ -25,10 +25,11 @@ MIN_LAT = -90.0
 MAX_LAT = -30.0
 MIN_LON = -180.0
 MAX_LON = 180.0
-GRID_STEP = 0.05  # ~3 NM resolution
+GRID_STEP = 0.5  # ~30 NM resolution (legacy, not used by routing)
 
 _LAND_MASK_GRID: np.ndarray | None = None
 _GEOPANDAS_GDF: gpd.GeoDataFrame | None = None
+_GEOPANDAS_LOCKED = False  # Prevent repeated loading
 
 
 def ensure_land_shapefile() -> Path:
@@ -102,13 +103,15 @@ def get_land_mask() -> np.ndarray:
     if _LAND_MASK_GRID is not None:
         return _LAND_MASK_GRID
 
-    if MASK_NPY_PATH.exists() and META_JSON_PATH.exists():
+    # Try to load from cached file first (fast)
+    if MASK_NPY_PATH.exists():
         try:
             _LAND_MASK_GRID = np.load(MASK_NPY_PATH)
             return _LAND_MASK_GRID
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to load cached land mask: {e}")
 
+    # Fall back to building from scratch (slow)
     _LAND_MASK_GRID = _build_land_mask()
     return _LAND_MASK_GRID
 
@@ -123,21 +126,12 @@ def is_land(lat: float, lon: float) -> bool:
         lon += 360.0
 
     if -90.0 <= lat < -30.0 and -180.0 <= lon < 180.0:
-        lat_idx = int((lat - MIN_LAT) * 20.0)  # 1 / 0.05 = 20.0
-        lon_idx = int((lon - MIN_LON) * 20.0)
-        if 0 <= lat_idx < 1200 and 0 <= lon_idx < 7200:
+        lat_idx = int((lat - MIN_LAT) * 5.0)  # 1 / 0.2 = 5.0
+        lon_idx = int((lon - MIN_LON) * 5.0)
+        if 0 <= lat_idx < 300 and 0 <= lon_idx < 1800:
             return bool(mask[lat_idx, lon_idx])
 
-    global _GEOPANDAS_GDF
-    if _GEOPANDAS_GDF is None:
-        ensure_land_shapefile()
-        _GEOPANDAS_GDF = gpd.read_file(SHP_PATH)
-
-    p = Point(lon, lat)
-    possible = _GEOPANDAS_GDF.cx[lon-0.1:lon+0.1, lat-0.1:lat+0.1]
-    for geom in possible.geometry:
-        if geom.contains(p) or geom.intersects(p):
-            return True
+    # For points outside grid, assume ocean (fallback)
     return False
 
 

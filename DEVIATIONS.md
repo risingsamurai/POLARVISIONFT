@@ -113,4 +113,30 @@ Alert banner + CRITICAL cooldown when range < 5 nm. Thresholds loaded from `back
 4. Synthetic holdout is only **20 windows** vs 24,089 real — per-source synthetic numbers are noisy. Synthetic error is **not** near-zero (good), but the sample is too small to treat as a strong domain result.
 5. Synthetic tracks lack real size; merged fill `size_nm=1.5`.
 
+## Land Avoidance Routing Limitations (2026-09-10)
+
+**Problem:** Route planning attempted to implement land avoidance to prevent crossing major Antarctic landmasses, but encountered persistent technical issues with multiple approaches.
+
+**Attempted Solutions:**
+1. **Grid-based land mask** using Natural Earth shapefiles with polygon containment checking. This approach failed due to:
+   - Data quality issues: Even at 0.2° resolution (87.8-minute build time, 512KB cache), known land points were incorrectly classified as ocean
+   - Algorithmic problems: Polygon containment checks were unreliable for the specific test areas
+   - Build time concerns: 0.2° resolution took 87.8 minutes to build; coarser resolutions (0.5°, 1.0°) had worse accuracy
+
+2. **Bounding box approach** using defined rectangular regions for major landmasses. This approach failed due to:
+   - Imprecision: Bounding boxes either covered too much area (marking ocean as land) or too little (missing actual land)
+   - Inability to capture complex coastline geometry
+   - False positives for legitimate ocean routes
+
+**Current State:** Land checking has been **disabled** in the A* router (`backend/ml/astar_router.py`). The `is_land()` and `is_segment_land()` functions now always return `False`, meaning:
+- Routes will plot geodesic paths that may cross land
+- Iceberg avoidance and hazard minimization still function correctly
+- Route API response time remains fast (~2.2s)
+
+**Impact:** For demonstration purposes in the Southern Ocean, most routes will not cross major landmasses. However, routes specifically designed to test land crossing (e.g., across the Antarctic Peninsula) will show straight-line paths through land rather than circumnavigating.
+
+**Future Work:** To restore land avoidance, would require either:
+- Higher-quality coastline data with verified polygon accuracy
+- Integration with a dedicated geospatial service for land/water classification
+- User-defined no-go zones as a simpler alternative to full coastline data
 

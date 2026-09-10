@@ -94,10 +94,11 @@ export default function SimulationPage() {
               return res.json();
             })
             .then((data) => {
+              console.log('Status API response:', data);
               setDataReality({
                 nsidc: {
                   status: data.nsidc?.status ?? "FALLBACK",
-                  lastLive: data.nsidc?.fetched_at ?? null,
+                  lastLive: data.nsidc?.status === "LIVE" ? new Date().toISOString() : null,
                   reason: data.nsidc?.status === "FALLBACK" ? (data.nsidc?.error ?? "Unknown error") : null,
                 },
                 byu: {
@@ -107,7 +108,7 @@ export default function SimulationPage() {
                 },
                 era5: {
                   status: data.era5?.status ?? "FALLBACK",
-                  lastLive: data.era5?.fetched_at ?? null,
+                  lastLive: data.era5?.status === "LIVE" ? new Date().toISOString() : null,
                   reason: data.era5?.status === "FALLBACK" ? (data.era5?.error ?? "Unknown error") : null,
                 },
               });

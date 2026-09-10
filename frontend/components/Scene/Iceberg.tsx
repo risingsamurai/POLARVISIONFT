@@ -7,51 +7,37 @@ import type { Iceberg } from "@/lib/mockData";
 import { latLonToScene } from "@/lib/geo";
 import { usePolarisStore } from "@/lib/store";
 
-// Procedural realistic iceberg geometry with individual rounded chunks
+// Procedural multi-faceted low-poly iceberg geometry
 function createIcebergGeometry(seed: number, sizeClass: string, scale: number) {
+  // Tabular or Pinnacle iceberg based on seed
+  const isTabular = (seed % 2) === 0;
+  let geo: THREE.BufferGeometry;
+
+  if (isTabular) {
+    geo = new THREE.CylinderGeometry(scale * 1.2, scale * 1.5, scale * 1.2, 7, 2);
+  } else {
+    geo = new THREE.DodecahedronGeometry(scale * 1.4, 1);
+  }
+
+  const pos = geo.attributes.position;
   const rng = (n: number) => {
     const x = Math.sin(seed * 78.233 + n * 12.9898) * 43758.5453;
     return x - Math.floor(x);
   };
 
-  // Create main iceberg body using icosahedron for more organic shape
-  const detail = Math.max(1, Math.floor(scale / 2));
-  const geo = new THREE.IcosahedronGeometry(scale, detail);
-  
-  const pos = geo.attributes.position;
-  const originalPositions = new Float32Array(pos.count * 3);
-  
-  // Store original positions
   for (let i = 0; i < pos.count; i++) {
-    originalPositions[i * 3] = pos.getX(i);
-    originalPositions[i * 3 + 1] = pos.getY(i);
-    originalPositions[i * 3 + 2] = pos.getZ(i);
-  }
+    const px = pos.getX(i);
+    const py = pos.getY(i);
+    const pz = pos.getZ(i);
 
-  // Apply noise displacement for realistic ice texture
-  for (let i = 0; i < pos.count; i++) {
-    const px = originalPositions[i * 3];
-    const py = originalPositions[i * 3 + 1];
-    const pz = originalPositions[i * 3 + 2];
+    const noise = (rng(i) - 0.5) * 0.55;
+    const heightFactor = py > 0 ? 1.0 + rng(i + 2) * 0.4 : 0.8;
 
-    // Multi-frequency noise for detailed surface
-    const noise1 = (rng(i) - 0.5) * 0.3;
-    const noise2 = (rng(i + 100) - 0.5) * 0.15;
-    const noise3 = (rng(i + 200) - 0.5) * 0.08;
-    
-    const totalNoise = noise1 + noise2 + noise3;
-    
-    // Height variation - taller peaks, flatter base
-    const heightFactor = py > 0 ? 1.0 + rng(i + 2) * 0.5 : 0.7 + rng(i + 3) * 0.2;
-    
-    // Apply displacement
-    const displacement = 1 + totalNoise * 0.4;
-    
     pos.setXYZ(
       i,
-      px * displacement,
-      py * heightFactor + totalNoise * scale * 0.2,
-      pz * displacement
+      px * (1 + noise * 0.45),
+      py * heightFactor + noise * scale * 0.3,
+      pz * (1 + noise * 0.45)
     );
   }
 
@@ -66,8 +52,8 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
   const showPred = usePolarisStore((s) => s.layers.predictions);
   const [x, , z] = latLonToScene(iceberg.lat, iceberg.lon);
 
-  // Scaled proportional to real size_nm for realistic appearance
-  const baseScale = Math.max(1.5, iceberg.diameterNm * 0.8);
+  // Scaled for high visibility in scene, proportional to real size_nm
+  const baseScale = Math.max(2.2, 1.8 + iceberg.diameterNm * 1.4);
   const seed = Math.abs(iceberg.lat * 100 + iceberg.lon * 10);
 
   const geo = useMemo(

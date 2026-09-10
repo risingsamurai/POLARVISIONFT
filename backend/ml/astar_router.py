@@ -1,4 +1,4 @@
-"""Weighted-grid A* producing three distinct Antarctic routes with land mask avoidance."""
+"""Weighted-grid A* producing three distinct Antarctic routes (land checking disabled due to data quality issues)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,13 @@ import math
 from typing import Iterable
 import numpy as np
 
-try:
-    from data.land_mask import is_land, is_segment_land
-except ImportError:
-    from backend.data.land_mask import is_land, is_segment_land
+def is_land(lat: float, lon: float) -> bool:
+    """Land checking disabled due to grid mask and bounding box accuracy issues."""
+    return False
+
+def is_segment_land(p1: tuple[float, float], p2: tuple[float, float], num_samples: int | None = None) -> bool:
+    """Land checking disabled due to grid mask and bounding box accuracy issues."""
+    return False
 
 
 def _haversine_nm(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -43,19 +46,19 @@ def astar(
     berg_w: float,
     dist_w: float,
     berg_radius: float,
-    step: float = 0.20,
+    step: float = 0.15,
     corridor_bias: float = 0.0,
-    max_iter: int = 15000,
+    max_iter: int = 8000,
 ) -> list[tuple[float, float]]:
-    """Runs land-avoiding A* search across ocean grid cells."""
+    """Runs A* search for route planning (land checking disabled due to data quality issues)."""
     s = (float(start[0]), float(start[1]))
     d = (float(dest[0]), float(dest[1]))
     step_nm = step * 60.0
 
-    min_lat = min(s[0], d[0]) - 5.0
-    max_lat = max(s[0], d[0]) + 5.0
-    min_lon = min(s[1], d[1]) - 8.0
-    max_lon = max(s[1], d[1]) + 8.0
+    min_lat = min(s[0], d[0]) - 10.0
+    max_lat = max(s[0], d[0]) + 10.0
+    min_lon = min(s[1], d[1]) - 15.0
+    max_lon = max(s[1], d[1]) + 15.0
 
     rel_bergs = [
         b for b in bergs 
@@ -94,19 +97,18 @@ def astar(
         visited.add(current)
 
         if _haversine_nm(current, d) < step_nm * 1.5:
-            if not is_segment_land(current, d):
-                path = [d]
-                curr: tuple[float, float] | None = current
-                while curr is not None:
-                    path.append(curr)
-                    curr = came[curr]
-                path.reverse()
-                return _smooth_path(path, rel_bergs, berg_radius)
+            path = [d]
+            curr: tuple[float, float] | None = current
+            while curr is not None:
+                path.append(curr)
+                curr = came[curr]
+            path.reverse()
+            return _smooth_path(path, rel_bergs, berg_radius)
 
         for dlat, dlon in dirs:
             nxt = (round(current[0] + dlat, 3), round(current[1] + dlon, 3))
             
-            if nxt in visited or is_land(nxt[0], nxt[1]):
+            if nxt in visited:
                 continue
 
             ice = _ice_at(*nxt)
@@ -133,7 +135,7 @@ def astar(
 
 
 def _smooth_path(path: list[tuple[float, float]], bergs: list[dict], berg_radius: float) -> list[tuple[float, float]]:
-    """Removes unnecessary zig-zag nodes if direct line-of-sight is land-free and hazard-safe."""
+    """Removes unnecessary zig-zag nodes if direct line-of-sight is hazard-safe."""
     if len(path) <= 2:
         return path
     smoothed = [path[0]]
@@ -141,8 +143,6 @@ def _smooth_path(path: list[tuple[float, float]], bergs: list[dict], berg_radius
     while curr < len(path) - 1:
         next_idx = curr + 1
         for test_idx in range(len(path) - 1, curr, -1):
-            if is_segment_land(path[curr], path[test_idx]):
-                continue
             hazard = False
             for b in bergs:
                 b_pos = (b["lat"], b["lon"])
@@ -216,8 +216,9 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
             berg_w=berg_w,
             dist_w=dist_w,
             berg_radius=berg_radius,
-            step=0.20,
+            step=0.15,
             corridor_bias=bias,
+            max_iter=8000,
         )
 
         nm = 0.0

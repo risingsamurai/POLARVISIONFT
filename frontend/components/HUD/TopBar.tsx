@@ -1,6 +1,7 @@
 "use client";
 
 import { usePolarisStore } from "@/lib/store";
+import { useState, useEffect } from "react";
 
 function Telemetry({
   label,
@@ -22,7 +23,18 @@ function Telemetry({
 export function TopBar() {
   const vessel = usePolarisStore((s) => s.vessel);
   const time = usePolarisStore((s) => s.simTimeIso);
-  const utc = new Date(time).toISOString().slice(11, 19);
+  const [utc, setUtc] = useState<string>("--:--:--");
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  useEffect(() => {
+    if (isClient) {
+      setUtc(new Date(time).toISOString().slice(11, 19));
+    }
+  }, [time, isClient]);
 
   return (
     <header className="pointer-events-auto hud-panel flex items-center justify-between gap-6 px-4 py-2.5">
